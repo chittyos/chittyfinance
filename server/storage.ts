@@ -25,6 +25,7 @@ export interface IStorage {
   // Business operations
   getBusinesses(userId: number, parentId?: number | null): Promise<Business[]>;
   getBusiness(id: number): Promise<Business | undefined>;
+  getBusinessWithSettings(businessId: number): Promise<Business & { cascadedSettings: any }>;
   createBusiness(business: InsertBusiness): Promise<Business>;
   updateBusiness(id: number, data: Partial<Business>): Promise<Business | undefined>;
   
@@ -164,7 +165,7 @@ export class DatabaseStorage implements IStorage {
     return result.map(r => r.tag);
   }
 
-  // AI Agent Template operations
+  // AI Agent Template operations (with cascading from parent templates)
   async getAiAgentTemplates(type?: string): Promise<AiAgentTemplate[]> {
     if (type) {
       return await db.select().from(aiAgentTemplates).where(
@@ -179,17 +180,68 @@ export class DatabaseStorage implements IStorage {
     return template || undefined;
   }
 
+  // Get AI agent template with cascaded properties from parent
+  async getAiAgentTemplateWithCascading(id: number): Promise<AiAgentTemplate & { cascadedPrompt: string }> {
+    const template = await this.getAiAgentTemplate(id);
+    if (!template) {
+      throw new Error("Template not found");
+    }
+
+    let cascadedPrompt = template.systemPrompt;
+    
+    // If has parent, cascade from parent first
+    if (template.parentId) {
+      const parent = await this.getAiAgentTemplateWithCascading(template.parentId);
+      // Parent prompt provides base, child prompt extends it
+      cascadedPrompt = `${parent.cascadedPrompt}\n\nAdditional context: ${template.systemPrompt}`;
+    }
+
+    return { ...template, cascadedPrompt };
+  }
+
   async createAiAgentTemplate(insertTemplate: InsertAiAgentTemplate): Promise<AiAgentTemplate> {
     const [template] = await db.insert(aiAgentTemplates).values(insertTemplate).returning();
     return template;
   }
 
-  // Report Template operations
+  // Report Template operations (with cascading from global to user-specific)
   async getReportTemplates(userId?: number): Promise<ReportTemplate[]> {
+    // Get both global templates and user-specific templates
+    const globalTemplates = await db.select().from(reportTemplates).where(isNull(reportTemplates.userId));
+    
     if (userId) {
-      return await db.select().from(reportTemplates).where(eq(reportTemplates.userId, userId));
+      const userTemplates = await db.select().from(reportTemplates).where(eq(reportTemplates.userId, userId));
+      // User templates override global ones by type
+      const userTemplateTypes = new Set(userTemplates.map(t => t.type));
+      const filteredGlobal = globalTemplates.filter(t => !userTemplateTypes.has(t.type));
+      return [...userTemplates, ...filteredGlobal];
     }
-    return await db.select().from(reportTemplates).where(isNull(reportTemplates.userId));
+    
+    return globalTemplates;
+  }
+
+  // Get business with cascaded settings from parent chain
+  async getBusinessWithSettings(businessId: number): Promise<Business & { cascadedSettings: any }> {
+    const business = await this.getBusiness(businessId);
+    if (!business) {
+      throw new Error("Business not found");
+    }
+
+    // Start with default settings
+    let cascadedSettings = {};
+    
+    // If has parent, get parent's cascaded settings first
+    if (business.parentId) {
+      const parent = await this.getBusinessWithSettings(business.parentId);
+      cascadedSettings = parent.cascadedSettings;
+    }
+    
+    // Merge business's own settings (override parent)
+    if (business.settings) {
+      cascadedSettings = { ...cascadedSettings, ...(business.settings as any) };
+    }
+
+    return { ...business, cascadedSettings };
   }
 
   async createReportTemplate(insertTemplate: InsertReportTemplate): Promise<ReportTemplate> {

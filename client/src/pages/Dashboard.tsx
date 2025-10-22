@@ -19,11 +19,16 @@ export default function Dashboard() {
         {/* Page Header with Focus Mode */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight mb-2" data-testid="text-page-title">
-              Portfolio Overview
-            </h1>
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="text-3xl font-semibold tracking-tight" data-testid="text-page-title">
+                Portfolio Overview
+              </h1>
+              <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium">
+                Yes you can!
+              </span>
+            </div>
             <p className="text-muted-foreground">
-              Real-time insights for your property portfolio
+              Be your own CFO - Real-time insights for your property portfolio
             </p>
           </div>
           <FocusModeToggle />
