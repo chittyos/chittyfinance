@@ -10,6 +10,8 @@ import { db } from "./db";
 import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
+  // Session helper (centralized for both modes)
+  getSessionUser(): Promise<User | undefined>;
   // User operations
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -39,9 +41,17 @@ export interface IStorage {
   // AI Message operations
   getAiMessages(userId: number, limit?: number): Promise<AiMessage[]>;
   createAiMessage(message: InsertAiMessage): Promise<AiMessage>;
+
+  // Utility
+  listIntegrationsByService(serviceType: string): Promise<Integration[]>;
 }
 
 export class DatabaseStorage implements IStorage {
+  // Session helper
+  async getSessionUser(): Promise<User | undefined> {
+    // Centralized demo session (until real auth is wired up)
+    return this.getUserByUsername("demo");
+  }
   // User operations
   async getUser(id: number): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -162,7 +172,7 @@ export class DatabaseStorage implements IStorage {
     const taskResults = limit ? await baseQuery.limit(limit) : await baseQuery;
 
     // Apply additional sorting for priority since SQL can't easily handle custom enum ordering
-    return taskResults.sort((a, b) => {
+    return (taskResults as Task[]).sort((a: Task, b: Task) => {
       // Priority ordering
       const priorityOrder = { urgent: 0, due_soon: 1, upcoming: 2, null: 3 };
       const aPriority = a.priority ? priorityOrder[a.priority as keyof typeof priorityOrder] : priorityOrder.null;
@@ -221,13 +231,155 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return message;
   }
+
+  async listIntegrationsByService(serviceType: string): Promise<Integration[]> {
+    return await db
+      .select()
+      .from(integrations)
+      .where(eq(integrations.serviceType, serviceType));
+  }
 }
 
-// Use the DatabaseStorage
-export const storage = new DatabaseStorage();
+class MemoryStorage implements IStorage {
+  private users: User[] = [];
+  private integrations: Integration[] = [];
+  private financialSummaries: FinancialSummary[] = [];
+  private transactions: Transaction[] = [];
+  private tasks: Task[] = [];
+  private aiMessages: AiMessage[] = [];
 
-// Initialize default data
+  private ids = {
+    user: 1,
+    integration: 1,
+    financialSummary: 1,
+    transaction: 1,
+    task: 1,
+    aiMessage: 1,
+  };
+
+  async getSessionUser(): Promise<User | undefined> {
+    return this.getUserByUsername("demo");
+  }
+
+  async getUser(id: number): Promise<User | undefined> {
+    return this.users.find((u) => u.id === id);
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    return this.users.find((u) => u.username === username);
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const user: User = { id: this.ids.user++, ...insertUser } as User;
+    this.users.push(user);
+    return user;
+  }
+
+  async getIntegrations(userId: number): Promise<Integration[]> {
+    return this.integrations.filter((i) => i.userId === userId);
+  }
+
+  async getIntegration(id: number): Promise<Integration | undefined> {
+    return this.integrations.find((i) => i.id === id);
+  }
+
+  async createIntegration(insertIntegration: InsertIntegration): Promise<Integration> {
+    const integration: Integration = { id: this.ids.integration++, ...insertIntegration } as Integration;
+    this.integrations.push(integration);
+    return integration;
+  }
+
+  async updateIntegration(id: number, data: Partial<Integration>): Promise<Integration | undefined> {
+    const idx = this.integrations.findIndex((i) => i.id === id);
+    if (idx === -1) return undefined;
+    this.integrations[idx] = { ...this.integrations[idx], ...data } as Integration;
+    return this.integrations[idx];
+  }
+
+  async getFinancialSummary(userId: number): Promise<FinancialSummary | undefined> {
+    return this.financialSummaries.find((s) => s.userId === userId);
+  }
+
+  async createFinancialSummary(insertSummary: InsertFinancialSummary): Promise<FinancialSummary> {
+    const summary: FinancialSummary = { id: this.ids.financialSummary++, updatedAt: new Date(), ...insertSummary } as FinancialSummary;
+    this.financialSummaries.push(summary);
+    return summary;
+  }
+
+  async updateFinancialSummary(userId: number, data: Partial<FinancialSummary>): Promise<FinancialSummary | undefined> {
+    const idx = this.financialSummaries.findIndex((s) => s.userId === userId);
+    if (idx === -1) return undefined;
+    const updated = { ...this.financialSummaries[idx], ...data, updatedAt: new Date() } as FinancialSummary;
+    this.financialSummaries[idx] = updated;
+    return updated;
+  }
+
+  async getTransactions(userId: number, limit?: number): Promise<Transaction[]> {
+    const list = this.transactions
+      .filter((t) => t.userId === userId)
+      .sort((a, b) => (new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()));
+    return typeof limit === 'number' ? list.slice(0, limit) : list;
+  }
+
+  async createTransaction(insertTransaction: InsertTransaction): Promise<Transaction> {
+    const transaction: Transaction = { id: this.ids.transaction++, ...insertTransaction } as Transaction;
+    this.transactions.push(transaction);
+    return transaction;
+  }
+
+  async getTasks(userId: number, limit?: number): Promise<Task[]> {
+    const list = this.tasks
+      .filter((t) => t.userId === userId)
+      .sort((a, b) => (new Date(a.dueDate || 0).getTime() - new Date(b.dueDate || 0).getTime()));
+    return typeof limit === 'number' ? list.slice(0, limit) : list;
+  }
+
+  async getTask(id: number): Promise<Task | undefined> {
+    return this.tasks.find((t) => t.id === id);
+  }
+
+  async createTask(insertTask: InsertTask): Promise<Task> {
+    const task: Task = { id: this.ids.task++, completed: false, ...insertTask } as Task;
+    this.tasks.push(task);
+    return task;
+  }
+
+  async updateTask(id: number, data: Partial<Task>): Promise<Task | undefined> {
+    const idx = this.tasks.findIndex((t) => t.id === id);
+    if (idx === -1) return undefined;
+    this.tasks[idx] = { ...this.tasks[idx], ...data } as Task;
+    return this.tasks[idx];
+  }
+
+  async getAiMessages(userId: number, limit?: number): Promise<AiMessage[]> {
+    const list = this.aiMessages
+      .filter((m) => m.userId === userId)
+      .sort((a, b) => (new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()));
+    return typeof limit === 'number' ? list.slice(0, limit) : list;
+  }
+
+  async createAiMessage(insertMessage: InsertAiMessage): Promise<AiMessage> {
+    const message: AiMessage = { id: this.ids.aiMessage++, timestamp: new Date(), ...insertMessage } as AiMessage;
+    this.aiMessages.push(message);
+    return message;
+  }
+
+  async listIntegrationsByService(serviceType: string): Promise<Integration[]> {
+    return this.integrations.filter((i) => i.serviceType === serviceType);
+  }
+}
+
+// Choose storage implementation by MODE
+const MODE = process.env.MODE || 'standalone';
+export const storage: IStorage = MODE === 'system' ? new DatabaseStorage() : new MemoryStorage();
+
+// Initialize default data (development/standalone only)
 (async () => {
+  const MODE = process.env.MODE || 'standalone';
+  const isProd = process.env.NODE_ENV === 'production';
+  if (MODE === 'system' || isProd) {
+    return; // no demo data in system or production
+  }
   try {
     // Check if demo user exists, if not create it
     let user = await storage.getUserByUsername("demo");

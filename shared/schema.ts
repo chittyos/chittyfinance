@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, real, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -136,3 +136,16 @@ export type InsertTask = z.infer<typeof insertTaskSchema>;
 
 export type AiMessage = typeof aiMessages.$inferSelect;
 export type InsertAiMessage = z.infer<typeof insertAiMessageSchema>;
+
+// AI token usage (per-user, weekly)
+export const aiTokenUsage = pgTable("ai_token_usage", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  weekStart: timestamp("week_start").notNull(), // Monday 00:00 UTC
+  tokensUsed: integer("tokens_used").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  userWeekIdx: uniqueIndex("ai_token_usage_user_week_idx").on(t.userId, t.weekStart),
+}));
+
+export type AiTokenUsage = typeof aiTokenUsage.$inferSelect;

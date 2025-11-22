@@ -1,4 +1,5 @@
 import { Integration } from "@shared/schema";
+import { getMercurySummary } from "./chittyConnect";
 
 // Interface for financial data returned by services
 export interface FinancialData {
@@ -18,31 +19,34 @@ export interface FinancialData {
 
 // Mock service for Mercury Bank
 export async function fetchMercuryBankData(integration: Integration): Promise<Partial<FinancialData>> {
-  // In a real implementation, this would connect to Mercury Bank API
-  console.log(`Fetching data from Mercury Bank for integration ID ${integration.id}`);
-  
-  // Return mock data for demo purposes
-  return {
-    cashOnHand: 127842.50,
-    transactions: [
-      {
-        id: "merc-1",
-        title: "Client Payment - Acme Corp",
-        description: "Invoice #12345",
-        amount: 7500.00,
-        type: 'income',
-        date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-      },
-      {
-        id: "merc-2",
-        title: "Office Rent",
-        description: "Monthly office space",
-        amount: -3500.00,
-        type: 'expense',
-        date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-      }
-    ]
-  };
+  // Prefer ChittyConnect backend if configured (supports static egress + multi-account)
+  const selected: string[] | undefined = (integration.credentials as any)?.selectedAccountIds;
+  const tenantId: string | undefined = (integration.credentials as any)?.tenantId;
+  const hasConnect = !!process.env.CHITTYCONNECT_API_BASE && !!(process.env.CHITTYCONNECT_API_TOKEN || process.env.CHITTY_AUTH_SERVICE_TOKEN);
+
+  if (hasConnect && selected && selected.length > 0) {
+    const summary = await getMercurySummary({ userId: integration.userId, tenantId, accountIds: selected });
+    return {
+      cashOnHand: summary.cashOnHand ?? 0,
+      transactions: (summary.transactions || []).map(t => ({
+        id: t.id,
+        title: t.description || 'Transaction',
+        amount: t.amount,
+        type: t.amount >= 0 ? 'income' : 'expense',
+        date: new Date(t.date),
+      })),
+    };
+  }
+
+  // In production system mode, do not return mock data
+  const isProdSystem = (process.env.NODE_ENV === 'production') && ((process.env.MODE || 'standalone') === 'system');
+  if (isProdSystem) {
+    throw new Error('Mercury data unavailable: ChittyConnect not configured or no accounts selected');
+  }
+
+  // Fallback minimal demo data only for non-production or standalone
+  console.log(`Fetching data from Mercury Bank (dev fallback) for integration ID ${integration.id}`);
+  return { cashOnHand: 0, transactions: [] };
 }
 
 // Mock service for WavApps

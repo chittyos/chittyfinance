@@ -8,8 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { getServiceColor, getServiceIcon } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
+import MercuryAccounts from "@/components/integrations/MercuryAccounts";
 
 export default function Settings() {
+  const { toast } = useToast();
+  type MercuryAccount = { id: string; name: string; last4?: string; type?: string; currency?: string };
   // Get user data
   const { data: user, isLoading: isLoadingUser } = useQuery<User>({
     queryKey: ["/api/session"],
@@ -18,6 +24,11 @@ export default function Settings() {
   // Get integrations
   const { data: integrations, isLoading: isLoadingIntegrations } = useQuery<Integration[]>({
     queryKey: ["/api/integrations"],
+  });
+
+  // Fetch Mercury accounts (for tooltips / labels)
+  const { data: mercuryAccounts } = useQuery<MercuryAccount[]>({
+    queryKey: ["/api/mercury/accounts"],
   });
 
   return (
@@ -106,16 +117,63 @@ export default function Settings() {
                           </div>
                           <div>
                             <h4 className="text-sm font-medium">{integration.name}</h4>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">{integration.description}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {integration.description}
+                              {integration.serviceType === "mercury_bank" && (
+                                <span className="ml-2 text-[11px] text-orange-600 dark:text-orange-400">Managed via ChittyConnect</span>
+                              )}
+                            </p>
                           </div>
                         </div>
-                        <div className="flex items-center space-x-4">
-                          <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2">
+                          {integration.serviceType === "mercury_bank" && (() => {
+                            const selected: string[] = ((integration.credentials as any)?.selectedAccountIds || []) as string[];
+                            const names = (mercuryAccounts || [])
+                              .filter(a => selected.includes(a.id))
+                              .map(a => `${a.name}${a.last4 ? ` • ${a.last4}` : ''}`);
+                            const count = selected.length || 0;
+                            return (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge variant="secondary" className="mr-1 cursor-default">
+                                      {count} {count === 1 ? 'account' : 'accounts'}
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <div className="max-w-xs whitespace-pre-line">
+                                      {names.length > 0 ? names.join('\n') : 'No account details available'}
+                                    </div>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
+                          })()}
+                          <div className="flex items-center space-x-2 mr-2">
                             <Switch id={`integration-${integration.id}`} checked={integration.connected ?? false} />
                             <Label htmlFor={`integration-${integration.id}`}>
                               {integration.connected ? "Connected" : "Disconnected"}
                             </Label>
                           </div>
+                          {integration.serviceType === "mercury_bank" && (
+                            <>
+                              <a href="/connect" target="_blank" rel="noreferrer">
+                                <Button variant="outline" size="sm">Connect</Button>
+                              </a>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-orange-500 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-950/30"
+                                onClick={() => {
+                                  const el = document.getElementById("mercury-accounts");
+                                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                                  toast({ title: "Mercury", description: "Jumped to accounts section." });
+                                }}
+                              >
+                                Manage accounts
+                              </Button>
+                            </>
+                          )}
                           <Button variant="outline" size="sm" className="hover:bg-orange-50 dark:hover:bg-orange-950/30">Tweak It</Button>
                         </div>
                       </div>
@@ -128,6 +186,10 @@ export default function Settings() {
                 )}
               </CardContent>
             </Card>
+
+            <div className="mt-6">
+              <MercuryAccounts />
+            </div>
           </TabsContent>
           
           <TabsContent value="notifications" className="mt-6">

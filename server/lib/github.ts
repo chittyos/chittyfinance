@@ -41,17 +41,29 @@ interface GitHubIssue {
   labels: string[];
 }
 
+function getGithubToken(): string | undefined {
+  return (
+    process.env.GITHUB_TOKEN ||
+    process.env.GH_TOKEN ||
+    process.env.GITHUB_PAT ||
+    process.env.GITHUB_SHITTYBOT_TOKEN
+  );
+}
+
+function githubHeaders(): Record<string, string> {
+  const token = getGithubToken();
+  const base = { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'ChittyFinance/1.0' };
+  return token ? { ...base, 'Authorization': `Bearer ${token}` } : base;
+}
+
 export async function fetchUserRepositories(integration: Integration): Promise<GitHubRepository[]> {
   try {
-    if (!process.env.GITHUB_SHITTYBOT_TOKEN) {
+    if (!getGithubToken()) {
       throw new Error("GitHub token not available");
     }
 
     const response = await fetch('https://api.github.com/user/repos?sort=updated&per_page=10', {
-      headers: {
-        'Authorization': `token ${process.env.GITHUB_SHITTYBOT_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
+      headers: githubHeaders(),
     });
 
     if (!response.ok) {
@@ -79,15 +91,12 @@ export async function fetchUserRepositories(integration: Integration): Promise<G
 
 export async function fetchRepositoryCommits(integration: Integration, repoFullName: string): Promise<GitHubCommit[]> {
   try {
-    if (!process.env.GITHUB_SHITTYBOT_TOKEN) {
+    if (!getGithubToken()) {
       throw new Error("GitHub token not available");
     }
 
     const response = await fetch(`https://api.github.com/repos/${repoFullName}/commits?per_page=5`, {
-      headers: {
-        'Authorization': `token ${process.env.GITHUB_SHITTYBOT_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
+      headers: githubHeaders(),
     });
 
     if (!response.ok) {
@@ -111,15 +120,12 @@ export async function fetchRepositoryCommits(integration: Integration, repoFullN
 
 export async function fetchRepositoryPullRequests(integration: Integration, repoFullName: string): Promise<GitHubPullRequest[]> {
   try {
-    if (!process.env.GITHUB_SHITTYBOT_TOKEN) {
+    if (!getGithubToken()) {
       throw new Error("GitHub token not available");
     }
 
     const response = await fetch(`https://api.github.com/repos/${repoFullName}/pulls?state=all&per_page=5`, {
-      headers: {
-        'Authorization': `token ${process.env.GITHUB_SHITTYBOT_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
+      headers: githubHeaders(),
     });
 
     if (!response.ok) {
@@ -145,15 +151,12 @@ export async function fetchRepositoryPullRequests(integration: Integration, repo
 
 export async function fetchRepositoryIssues(integration: Integration, repoFullName: string): Promise<GitHubIssue[]> {
   try {
-    if (!process.env.GITHUB_SHITTYBOT_TOKEN) {
+    if (!getGithubToken()) {
       throw new Error("GitHub token not available");
     }
 
     const response = await fetch(`https://api.github.com/repos/${repoFullName}/issues?state=all&per_page=5`, {
-      headers: {
-        'Authorization': `token ${process.env.GITHUB_SHITTYBOT_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
+      headers: githubHeaders(),
     });
 
     if (!response.ok) {

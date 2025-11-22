@@ -5,6 +5,7 @@ import { z } from "zod";
 import { insertAiMessageSchema, insertIntegrationSchema, insertTaskSchema } from "@shared/schema";
 import { getFinancialAdvice, generateCostReductionPlan } from "./lib/openai";
 import { getAggregatedFinancialData } from "./lib/financialServices";
+import { listMercuryAccounts } from "./lib/chittyConnect";
 import { getRecurringCharges, getChargeOptimizations, manageRecurringCharge } from "./lib/chargeAutomation";
 import { 
   fetchUserRepositories, 
@@ -17,25 +18,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create API router
   const api = express.Router();
 
-  // Auto-login for demo purposes - in a real app this would be a proper authentication flow
-  api.get("/session", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
-    
-    if (!user) {
-      return res.status(404).json({ 
-        message: "Demo user not found" 
-      });
+  // Helper route: redirect to ChittyConnect for account linking
+  app.get("/connect", (_req: Request, res: Response) => {
+    const url = process.env.CHITTY_CONNECT_URL || "https://connect.chitty.cc";
+    res.redirect(302, url);
+  });
+
+  // Helper route: redirect to ChittyRegister (get.chitty.cc) for service registration
+  app.get("/register", (_req: Request, res: Response) => {
+    const url = process.env.CHITTY_REGISTER_URL || "https://get.chitty.cc";
+    res.redirect(302, url);
+  });
+
+  // Session endpoint
+  api.get("/session", async (_req: Request, res: Response) => {
+    const isProdSystem = (res.app.get('env') === 'production') && ((process.env.MODE || 'standalone') === 'system');
+    if (isProdSystem) {
+      return res.status(401).json({ message: 'Authentication required (ChittyID integration expected)' });
     }
-    
-    // Don't send password to client
+
+    const user = await storage.getSessionUser();
+    if (!user) return res.status(404).json({ message: 'Demo user not found' });
     const { password, ...safeUser } = user;
     res.json(safeUser);
   });
 
   // Get financial summary
   api.get("/financial-summary", async (req: Request, res: Response) => {
-    // In a real app, we would get the user ID from the session
-    const user = await storage.getUserByUsername("demo");
+    // In a real app, we would get the user ID and tenant ID from the session/middleware
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -60,7 +71,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get integrations
   api.get("/integrations", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -69,10 +80,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(integrations);
   });
 
+  // Mercury account discovery via ChittyConnect (multi-account support)
+  api.get("/mercury/accounts", async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getSessionUser();
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const tenantId = (req as any).tenantId as string | undefined;
+      const accounts = await listMercuryAccounts({ userId: user.id, tenantId });
+      res.json(accounts);
+    } catch (error) {
+      console.error("Error listing Mercury accounts:", error);
+      res.status(500).json({ message: "Failed to list Mercury accounts" });
+    }
+  });
+
+  // Select which Mercury accounts to sync
+  api.post("/mercury/select-accounts", async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getSessionUser();
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const { accountIds, tenantId } = req.body as { accountIds: string[]; tenantId?: string };
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ message: "accountIds must be a non-empty array" });
+      }
+      const integrations = await storage.getIntegrations(user.id);
+      let merc = integrations.find(i => i.serviceType === 'mercury_bank');
+      if (!merc) {
+        merc = await storage.createIntegration({
+          userId: user.id,
+          serviceType: 'mercury_bank',
+          name: 'Mercury Bank',
+          connected: true,
+          credentials: {},
+          description: 'Banking & Financial Data',
+          lastSynced: new Date(),
+        });
+      }
+      const updated = await storage.updateIntegration(merc.id, {
+        credentials: { ...(merc.credentials || {}), selectedAccountIds: accountIds, tenantId },
+        lastSynced: new Date(),
+      } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error selecting Mercury accounts:", error);
+      res.status(500).json({ message: "Failed to update selected accounts" });
+    }
+  });
+
   // Create or update integration
   api.post("/integrations", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -110,7 +168,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get recent transactions
   api.get("/transactions", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -123,7 +181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get tasks
   api.get("/tasks", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -137,7 +195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create task
   api.post("/tasks", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -175,7 +233,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get AI messages
   api.get("/ai-messages", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -188,7 +246,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get latest AI assistant message
   api.get("/ai-assistant/latest", async (req: Request, res: Response) => {
-    const user = await storage.getUserByUsername("demo");
+    const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -202,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Send message to AI assistant
   api.post("/ai-assistant/query", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -236,7 +294,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         monthlyExpenses: summary.monthlyExpenses,
         outstandingInvoices: summary.outstandingInvoices,
         previousAdvice: previousAssistantMessage,
-        userQuery: query
+        userQuery: query,
+        userId: user.id,
       });
 
       // Store AI response
@@ -256,7 +315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Generate cost reduction plan
   api.post("/ai-assistant/generate-plan", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -271,7 +330,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const plan = await generateCostReductionPlan({
         cashOnHand: summary.cashOnHand,
         monthlyRevenue: summary.monthlyRevenue,
-        monthlyExpenses: summary.monthlyExpenses
+        monthlyExpenses: summary.monthlyExpenses,
+        userId: user.id,
       });
 
       // Store AI response
@@ -293,7 +353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get recurring charges
   api.get("/charges/recurring", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -309,7 +369,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get charge optimization recommendations
   api.get("/charges/optimizations", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -325,7 +385,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Cancel or modify a recurring charge
   api.post("/charges/manage", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -353,7 +413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get GitHub repositories
   api.get("/github/repositories", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -389,7 +449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get GitHub repository commits
   api.get("/github/repositories/:repoFullName/commits", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -418,7 +478,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get GitHub repository pull requests
   api.get("/github/repositories/:repoFullName/pulls", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -447,7 +507,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get GitHub repository issues
   api.get("/github/repositories/:repoFullName/issues", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUserByUsername("demo");
+      const user = await storage.getSessionUser();
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -475,6 +535,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Register API routes
   app.use("/api", api);
+
+  // Compliance: required health and status endpoints
+  app.get('/health', (_req: Request, res: Response) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
+  app.get('/api/v1/status', async (_req: Request, res: Response) => {
+    const start = Date.now();
+    let version = process.env.APP_VERSION || 'unknown';
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const pkgPath = path.resolve(process.cwd(), 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const raw = fs.readFileSync(pkgPath, 'utf-8');
+        const pkg = JSON.parse(raw);
+        if (pkg?.version) version = pkg.version;
+      }
+    } catch {}
+
+    const MODE = process.env.MODE || 'standalone';
+    const nodeEnv = process.env.NODE_ENV || 'development';
+    const dbConfigured = MODE === 'standalone' ? true : !!process.env.DATABASE_URL;
+    const chittyBase = process.env.CHITTYCONNECT_API_BASE || process.env.CHITTY_CONNECT_URL;
+    const chittyAuth = process.env.CHITTYCONNECT_API_TOKEN || process.env.CHITTY_AUTH_SERVICE_TOKEN;
+
+    res.json({
+      name: 'ChittyFinance',
+      version,
+      uptimeSec: Math.floor(process.uptime()),
+      mode: MODE,
+      nodeEnv,
+      database: { configured: dbConfigured },
+      chittyConnect: { configured: !!(chittyBase && chittyAuth) },
+      latencyMs: Date.now() - start,
+    });
+  });
+
+  // Documentation (OpenAPI JSON)
+  app.get('/api/v1/documentation', (_req: Request, res: Response) => {
+    const version = process.env.APP_VERSION || '1.0.0';
+    const openapi = {
+      openapi: '3.0.3',
+      info: { title: 'ChittyFinance API', version, description: 'ChittyFinance API for the ChittyOS ecosystem.' },
+      servers: [{ url: 'https://finance.chitty.cc' }],
+      paths: {
+        '/health': { get: { summary: 'Health check', responses: { '200': { description: 'OK' } } } },
+        '/api/v1/status': { get: { summary: 'Service status', responses: { '200': { description: 'Service status' } } } },
+        '/api/mercury/accounts': { get: { summary: 'List Mercury accounts (via ChittyConnect)', responses: { '200': { description: 'Accounts' }, '401': { description: 'Unauthorized' } } } },
+        '/api/mercury/select-accounts': { post: { summary: 'Select Mercury accounts to sync', responses: { '200': { description: 'Updated integration' }, '400': { description: 'Bad request' }, '401': { description: 'Unauthorized' } } } }
+      }
+    } as const;
+    res.status(200).json(openapi);
+  });
+
+  // Prometheus-style metrics
+  app.get('/api/v1/metrics', (_req: Request, res: Response) => {
+    const uptime = Math.floor(process.uptime());
+    const MODE = process.env.MODE || 'standalone';
+    const dbConfigured = MODE === 'standalone' ? 1 : (process.env.DATABASE_URL ? 1 : 0);
+    const chittyConfigured = (process.env.CHITTYCONNECT_API_BASE && (process.env.CHITTYCONNECT_API_TOKEN || process.env.CHITTY_AUTH_SERVICE_TOKEN)) ? 1 : 0;
+    const lines = [
+      '# HELP service_uptime_seconds Process uptime in seconds',
+      '# TYPE service_uptime_seconds gauge',
+      `service_uptime_seconds ${uptime}`,
+      '# HELP service_database_configured Database configured (1) or not (0)',
+      '# TYPE service_database_configured gauge',
+      `service_database_configured ${dbConfigured}`,
+      '# HELP service_chittyconnect_configured ChittyConnect configured (1) or not (0)',
+      '# TYPE service_chittyconnect_configured gauge',
+      `service_chittyconnect_configured ${chittyConfigured}`,
+      ''
+    ];
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+    res.status(200).send(lines.join('\n'));
+  });
 
   const httpServer = createServer(app);
   return httpServer;
