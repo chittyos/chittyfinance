@@ -20,6 +20,37 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // Cloudflare Agent entrypoint (placeholder until full Agents integration)
+    // Requirement: agent should be available at /agent
+    if (path === '/agent') {
+      const html = `<!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>ChittyFinance Agent</title>
+          <style>
+            body { font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 40px; line-height: 1.5; }
+            code { padding: 2px 4px; background: #f5f5f5; border-radius: 4px; }
+            .muted { color: #666 }
+          </style>
+        </head>
+        <body>
+          <h1>ChittyFinance Agent</h1>
+          <p class="muted">System mode endpoint is reserved for Cloudflare Agents.</p>
+          <p>Docs: <a href="https://github.com/cloudflare/agents" target="_blank" rel="noreferrer">cloudflare/agents</a></p>
+          <p>Status:</p>
+          <pre>{
+  "mode": "${env.MODE || 'system'}",
+  "nodeEnv": "${env.NODE_ENV || 'production'}",
+  "provider": "cloudflare-agents (pending integration)",
+  "ready": false
+}</pre>
+        </body>
+        </html>`;
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
+
     if (path === '/health') {
       return json({ status: 'ok' });
     }
