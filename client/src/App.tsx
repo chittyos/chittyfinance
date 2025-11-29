@@ -9,6 +9,7 @@ import Landing from "@/pages/Landing";
 import NotFound from "@/pages/not-found";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
+import Connections from "@/pages/Connections";
 import { User } from "@shared/schema";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
@@ -36,6 +37,7 @@ function Router() {
         <main className="flex-1 relative overflow-y-auto focus:outline-none">
           <Switch>
             <Route path="/" component={Dashboard} />
+            <Route path="/connections" component={Connections} />
             <Route path="/settings" component={Settings} />
             <Route component={NotFound} />
           </Switch>

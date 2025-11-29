@@ -24,3 +24,14 @@ interface Fetcher {
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
 }
 
+// Minimal Durable Objects types
+interface DurableObjectId {}
+interface DurableObjectNamespace {
+  idFromName(name: string): DurableObjectId;
+  idFromString(id: string): DurableObjectId;
+  newUniqueId(): DurableObjectId;
+  get(id: DurableObjectId): DurableObjectStub;
+}
+interface DurableObjectStub {
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}

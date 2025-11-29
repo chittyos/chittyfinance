@@ -1,15 +1,9 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { 
-  Home, 
-  BarChart, 
-  DollarSign, 
-  FileText, 
-  Settings, 
-  Menu
-} from "lucide-react";
+import { Home, BarChart, DollarSign, FileText, Settings, Menu, Plug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { TenantSwitcher } from "./TenantSwitcher";
 
 export default function Sidebar() {
   const [location] = useLocation();
@@ -89,13 +83,23 @@ export default function Sidebar() {
               <NavItem href="/invoices" icon={<FileText />} active={location === "/invoices"}>
                 Invoices
               </NavItem>
+              <NavItem href="/connections" icon={<Plug />} active={location === "/connections"}>
+                Connections
+              </NavItem>
               
               <NavItem href="/settings" icon={<Settings />} active={location === "/settings"}>
                 Settings
               </NavItem>
             </nav>
           </div>
-          
+
+          {/* Tenant Switcher (system mode only) */}
+          {import.meta.env.MODE === 'system' && (
+            <div className="px-4 pb-4">
+              <TenantSwitcher />
+            </div>
+          )}
+
           {user && (
             <div className="p-4 border-t border-border">
               <div className="flex items-center">

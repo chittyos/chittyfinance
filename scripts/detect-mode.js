@@ -2,8 +2,11 @@
 // Mode detection script for ChittyFinance
 // Determines whether to run in standalone or system mode
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function detectMode() {
   // Check if MODE is explicitly set
@@ -36,4 +39,4 @@ console.log(`   To override, set MODE=${mode === 'system' ? 'standalone' : 'syst
 // Set npm script to run
 process.env.npm_lifecycle_event = `dev:${mode}`;
 
-module.exports = { detectMode };
+export { detectMode };

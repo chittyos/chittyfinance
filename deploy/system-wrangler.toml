@@ -66,11 +66,15 @@ binding = "DOCUMENTS"
 bucket_name = "chittyfinance-documents"
 preview_bucket_name = "chittyfinance-documents-preview"
 
-# Durable Objects (for real-time features)
-# [[durable_objects.bindings]]
-# name = "FINANCIAL_SYNC"
-# class_name = "FinancialSync"
-# script_name = "chittyfinance"
+# Durable Objects (Agent)
+[[durable_objects.bindings]]
+name = "CF_AGENT"
+class_name = "ChittyAgent"
+
+# Migrations for Durable Object (SQLite storage)
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChittyAgent"]
 
 # Analytics Engine for usage tracking
 # [[analytics_engine_datasets]]

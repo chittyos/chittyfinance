@@ -1,3 +1,10 @@
+/**
+ * Server Entry
+ * - Express API + client dev middleware (Vite in dev, static in prod)
+ * - Routes registered via `server/routes.ts`
+ * - Data access centralized in `server/storage.ts`
+ * - Default port 5000; override with `PORT`
+ */
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { tenantScope } from './middleware/tenant';

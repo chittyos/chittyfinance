@@ -149,3 +149,8 @@ export const aiTokenUsage = pgTable("ai_token_usage", {
 }));
 
 export type AiTokenUsage = typeof aiTokenUsage.$inferSelect;
+/**
+ * Drizzle ORM schema and shared types
+ * - Import into server via `@shared/schema`
+ * - Run `npm run db:push` after schema changes
+ */

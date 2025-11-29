@@ -7,7 +7,8 @@ import {
   aiMessages, type AiMessage, type InsertAiMessage
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
+import { webhookEvents, type NewWebhookEvent } from "@shared/finance.schema";
 
 export interface IStorage {
   // Session helper (centralized for both modes)
@@ -44,6 +45,11 @@ export interface IStorage {
 
   // Utility
   listIntegrationsByService(serviceType: string): Promise<Integration[]>;
+
+  // Webhook operations
+  isWebhookDuplicate(source: string, eventId: string): Promise<boolean>;
+  recordWebhookEvent(data: Omit<NewWebhookEvent, 'id' | 'receivedAt'>): Promise<any>;
+  listWebhookEvents(params: { source?: string; limit?: number; cursor?: number }): Promise<{ items: any[]; nextCursor?: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -238,6 +244,43 @@ export class DatabaseStorage implements IStorage {
       .from(integrations)
       .where(eq(integrations.serviceType, serviceType));
   }
+
+  // Webhook events
+  async isWebhookDuplicate(source: string, eventId: string): Promise<boolean> {
+    const [row] = await db
+      .select()
+      .from(webhookEvents)
+      .where(and(eq(webhookEvents.source, source), eq(webhookEvents.eventId, eventId)))
+      .limit(1);
+    return Boolean(row);
+  }
+
+  async recordWebhookEvent(data: Omit<NewWebhookEvent, 'id' | 'receivedAt'>) {
+    const [row] = await db
+      .insert(webhookEvents)
+      .values(data as NewWebhookEvent)
+      .onConflictDoNothing({ target: [webhookEvents.source, webhookEvents.eventId] })
+      .returning();
+    return row;
+  }
+
+  async listWebhookEvents(params: { source?: string; limit?: number; cursor?: number }) {
+    const { source, limit = 50, cursor } = params;
+    let q = db.select().from(webhookEvents).orderBy(desc(webhookEvents.receivedAt));
+    if (source) {
+      // @ts-ignore drizzle chainable where
+      q = (q as any).where(eq(webhookEvents.source, source));
+    }
+    if (cursor) {
+      // naive cursor by id less-than
+      // @ts-ignore
+      q = (q as any).where((eb: any) => eb.lt(webhookEvents.id, cursor));
+    }
+    // @ts-ignore
+    const rows = await (q as any).limit(Math.min(limit, 100));
+    const nextCursor = rows.length ? rows[rows.length - 1].id : undefined;
+    return { items: rows, nextCursor };
+  }
 }
 
 class MemoryStorage implements IStorage {
@@ -366,6 +409,18 @@ class MemoryStorage implements IStorage {
 
   async listIntegrationsByService(serviceType: string): Promise<Integration[]> {
     return this.integrations.filter((i) => i.serviceType === serviceType);
+  }
+
+  async isWebhookDuplicate(_source: string, _eventId: string): Promise<boolean> {
+    return false; // In-memory mode doesn't track webhooks
+  }
+
+  async recordWebhookEvent(_data: any): Promise<any> {
+    return null; // In-memory mode doesn't persist webhooks
+  }
+
+  async listWebhookEvents(_params: any): Promise<{ items: any[]; nextCursor?: number }> {
+    return { items: [] }; // In-memory mode doesn't store webhooks
   }
 }
 

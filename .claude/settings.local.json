@@ -10,7 +10,14 @@
       "Bash(npm run check:*)",
       "Bash(npm run typecheck:*)",
       "Bash(rm:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(npm run mode:detect:*)",
+      "Bash(npm run db:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run deploy:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }

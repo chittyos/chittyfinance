@@ -1,18 +1,25 @@
 import express, { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { systemStorage } from "./storage-system";
+import { chittyConnectAuth, serviceAuth } from "./middleware/auth";
+import { resolveTenant } from "./middleware/tenant";
+import { getServiceBase } from "./lib/registry";
+import { getServiceAuthHeader } from "./lib/chitty-connect";
 import { z } from "zod";
 import { insertAiMessageSchema, insertIntegrationSchema, insertTaskSchema } from "@shared/schema";
 import { getFinancialAdvice, generateCostReductionPlan } from "./lib/openai";
 import { getAggregatedFinancialData } from "./lib/financialServices";
 import { listMercuryAccounts } from "./lib/chittyConnect";
 import { getRecurringCharges, getChargeOptimizations, manageRecurringCharge } from "./lib/chargeAutomation";
-import { 
-  fetchUserRepositories, 
-  fetchRepositoryCommits, 
-  fetchRepositoryPullRequests, 
-  fetchRepositoryIssues 
+import {
+  fetchUserRepositories,
+  fetchRepositoryCommits,
+  fetchRepositoryPullRequests,
+  fetchRepositoryIssues
 } from "./lib/github";
+
+const MODE = process.env.MODE || 'standalone';
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Create API router
@@ -43,6 +50,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(safeUser);
   });
 
+  // Tenant endpoints (system mode only)
+  if (MODE === 'system') {
+    api.get("/tenants", chittyConnectAuth, async (req: Request, res: Response) => {
+      const userId = req.userId || (await storage.getSessionUser())?.id;
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
+      const tenants = await systemStorage.getUserTenants(String(userId));
+      res.json(tenants);
+    });
+
+    api.get("/tenants/:id", chittyConnectAuth, async (req: Request, res: Response) => {
+      const tenant = await systemStorage.getTenant(req.params.id);
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      res.json(tenant);
+    });
+
+    api.get("/accounts", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      const accounts = await systemStorage.getAccounts(req.tenantId!);
+      res.json(accounts);
+    });
+
+    api.get("/transactions", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const transactions = await systemStorage.getTransactions(req.tenantId!, limit);
+      res.json(transactions);
+    });
+  }
+
   // Get financial summary
   api.get("/financial-summary", async (req: Request, res: Response) => {
     // In a real app, we would get the user ID and tenant ID from the session/middleware
@@ -70,7 +104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get integrations
-  api.get("/integrations", async (req: Request, res: Response) => {
+  api.get("/integrations", chittyConnectAuth, async (req: Request, res: Response) => {
     const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -128,7 +162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create or update integration
-  api.post("/integrations", async (req: Request, res: Response) => {
+  api.post("/integrations", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -147,7 +181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update integration
-  api.patch("/integrations/:id", async (req: Request, res: Response) => {
+  api.patch("/integrations/:id", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -167,7 +201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get recent transactions
-  api.get("/transactions", async (req: Request, res: Response) => {
+  api.get("/transactions", chittyConnectAuth, async (req: Request, res: Response) => {
     const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -180,7 +214,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get tasks
-  api.get("/tasks", async (req: Request, res: Response) => {
+  api.get("/tasks", chittyConnectAuth, async (req: Request, res: Response) => {
     const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -193,7 +227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create task
-  api.post("/tasks", async (req: Request, res: Response) => {
+  api.post("/tasks", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -212,7 +246,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update task
-  api.patch("/tasks/:id", async (req: Request, res: Response) => {
+  api.patch("/tasks/:id", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -232,7 +266,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get AI messages
-  api.get("/ai-messages", async (req: Request, res: Response) => {
+  api.get("/ai-messages", chittyConnectAuth, async (req: Request, res: Response) => {
     const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -245,7 +279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get latest AI assistant message
-  api.get("/ai-assistant/latest", async (req: Request, res: Response) => {
+  api.get("/ai-assistant/latest", chittyConnectAuth, async (req: Request, res: Response) => {
     const user = await storage.getSessionUser();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -258,7 +292,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Send message to AI assistant
-  api.post("/ai-assistant/query", async (req: Request, res: Response) => {
+  api.post("/ai-assistant/query", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -313,7 +347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate cost reduction plan
-  api.post("/ai-assistant/generate-plan", async (req: Request, res: Response) => {
+  api.post("/ai-assistant/generate-plan", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -351,7 +385,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Charge Automation Routes
   
   // Get recurring charges
-  api.get("/charges/recurring", async (req: Request, res: Response) => {
+  api.get("/charges/recurring", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -411,7 +445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GitHub Integration Routes
   
   // Get GitHub repositories
-  api.get("/github/repositories", async (req: Request, res: Response) => {
+  api.get("/github/repositories", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -447,7 +481,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get GitHub repository commits
-  api.get("/github/repositories/:repoFullName/commits", async (req: Request, res: Response) => {
+  api.get("/github/repositories/:repoFullName/commits", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -476,7 +510,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get GitHub repository pull requests
-  api.get("/github/repositories/:repoFullName/pulls", async (req: Request, res: Response) => {
+  api.get("/github/repositories/:repoFullName/pulls", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -505,7 +539,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get GitHub repository issues
-  api.get("/github/repositories/:repoFullName/issues", async (req: Request, res: Response) => {
+  api.get("/github/repositories/:repoFullName/issues", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getSessionUser();
       if (!user) {
@@ -536,6 +570,129 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Register API routes
   app.use("/api", api);
 
+  // Service webhook endpoint (from Worker)
+  app.post("/api/integrations/mercury/webhook", serviceAuth, async (req: Request, res: Response) => {
+    try {
+      const eventId = (req.headers['x-event-id'] as string) || (req.body && (req.body.id || req.body.eventId));
+      if (!eventId) {
+        return res.status(400).json({ message: 'missing_event_id' });
+      }
+      // DB-backed idempotency
+      const duplicate = await storage.isWebhookDuplicate('mercury', eventId);
+      if (duplicate) return res.status(202).json({ received: true, duplicate: true });
+      await storage.recordWebhookEvent({ source: 'mercury', eventId, payload: req.body || null });
+
+      // Coordinate with Chitty services via Registry (non-blocking)
+      const envelope = {
+        source: 'mercury',
+        event_id: eventId,
+        kind: req.body?.type || 'unknown',
+        received_at: new Date().toISOString(),
+        payload: req.body || null,
+      };
+      const headers = { 'content-type': 'application/json', ...getServiceAuthHeader() } as any;
+      try {
+        const evidenceBase = await getServiceBase('evidence');
+        await fetch(`${evidenceBase.replace(/\/$/, '')}/ingest`, { method: 'POST', headers, body: JSON.stringify(envelope) });
+      } catch {}
+      try {
+        const kind = String(envelope.kind || '');
+        if (kind.startsWith('mercury.transaction')) {
+          const ledgerBase = await getServiceBase('ledger');
+          await fetch(`${ledgerBase.replace(/\/$/, '')}/ingest`, { method: 'POST', headers, body: JSON.stringify(envelope) });
+        }
+      } catch {}
+      try {
+        const chronicleBase = await getServiceBase('chronicle');
+        const summary = { message: `Mercury event ${envelope.kind} (${eventId})`, ts: envelope.received_at };
+        await fetch(`${chronicleBase.replace(/\/$/, '')}/entries`, { method: 'POST', headers, body: JSON.stringify(summary) });
+      } catch {}
+      try {
+        const logicBase = await getServiceBase('logic');
+        const summary = { key: 'finance_event', data: { source: envelope.source, kind: envelope.kind } };
+        await fetch(`${logicBase.replace(/\/$/, '')}/evaluate`, { method: 'POST', headers, body: JSON.stringify(summary) });
+      } catch {}
+
+      res.status(202).json({ received: true });
+    } catch (e) {
+      res.status(500).json({ message: "webhook_error" });
+    }
+  });
+
+  // List webhook events (coordination with events API)
+  api.get('/integrations/events', chittyConnectAuth, async (req: Request, res: Response) => {
+    const source = (req.query.source as string | undefined) || undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+    const cursor = req.query.cursor ? parseInt(req.query.cursor as string, 10) : undefined;
+    const data = await storage.listWebhookEvents({ source, limit, cursor });
+    res.json(data);
+  });
+
+  // Admin: list recent events (alias)
+  api.get('/admin/events', chittyConnectAuth, async (req: Request, res: Response) => {
+    const source = (req.query.source as string | undefined) || undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+    const cursor = req.query.cursor ? parseInt(req.query.cursor as string, 10) : undefined;
+    const data = await storage.listWebhookEvents({ source, limit, cursor });
+    res.json(data);
+  });
+
+  // Admin: replay last N events to Chitty services via Registry
+  api.post('/admin/events/replay', chittyConnectAuth, async (req: Request, res: Response) => {
+    try {
+      const source = (req.body?.source as string | undefined) || (req.query.source as string | undefined) || undefined;
+      const limit = req.body?.limit ? parseInt(String(req.body.limit), 10) : (req.query.limit ? parseInt(String(req.query.limit), 10) : 50);
+      const sinceStr = (req.body?.since as string | undefined) || (req.query.since as string | undefined) || undefined;
+      let items = (await storage.listWebhookEvents({ source, limit })).items;
+      if (sinceStr) {
+        const since = new Date(sinceStr).getTime();
+        if (!Number.isNaN(since)) {
+          items = items.filter((r: any) => new Date(r.receivedAt || 0).getTime() >= since);
+        }
+      }
+      const headers = { 'content-type': 'application/json', ...getServiceAuthHeader() } as any;
+      let attempted = 0, succeeded = 0; const errors: string[] = [];
+      // Resolve once per replay
+      let evidenceBase = '' , ledgerBase = '' , chronicleBase = '' , logicBase = '';
+      try { evidenceBase = await getServiceBase('evidence'); } catch (e: any) { errors.push(`evidence: ${e?.message||e}`); }
+      try { ledgerBase = await getServiceBase('ledger'); } catch (e: any) { errors.push(`ledger: ${e?.message||e}`); }
+      try { chronicleBase = await getServiceBase('chronicle'); } catch (e: any) { errors.push(`chronicle: ${e?.message||e}`); }
+      try { logicBase = await getServiceBase('logic'); } catch (e: any) { errors.push(`logic: ${e?.message||e}`); }
+      // Optional retry service
+      let retryBase = '';
+      try { retryBase = await getServiceBase('retry' as any); } catch {}
+
+      for (const row of items) {
+        const eventId = (row as any).eventId || (row as any).event_id || (row as any).id;
+        const kind = (row as any).payload?.type || 'unknown';
+        const envelope = {
+          source: (row as any).source,
+          event_id: eventId,
+          kind,
+          received_at: new Date((row as any).receivedAt || Date.now()).toISOString(),
+          payload: (row as any).payload || null,
+        };
+        attempted++;
+        try {
+          if (retryBase) {
+            await fetch(`${retryBase.replace(/\/$/, '')}/enqueue`, { method: 'POST', headers, body: JSON.stringify({ type: 'finance_event_replay', envelope }) });
+          } else {
+            if (evidenceBase) await fetch(`${evidenceBase.replace(/\/$/, '')}/ingest`, { method: 'POST', headers, body: JSON.stringify(envelope) });
+            if (ledgerBase && String(kind).startsWith('mercury.transaction')) await fetch(`${ledgerBase.replace(/\/$/, '')}/ingest`, { method: 'POST', headers, body: JSON.stringify(envelope) });
+            if (chronicleBase) await fetch(`${chronicleBase.replace(/\/$/, '')}/entries`, { method: 'POST', headers, body: JSON.stringify({ message: `Replay ${envelope.kind} (${envelope.event_id})`, ts: envelope.received_at }) });
+            if (logicBase) await fetch(`${logicBase.replace(/\/$/, '')}/evaluate`, { method: 'POST', headers, body: JSON.stringify({ key: 'finance_event_replay', data: { source: envelope.source, kind: envelope.kind } }) });
+          }
+          succeeded++;
+        } catch (e: any) {
+          errors.push(String(e?.message || e));
+        }
+      }
+      res.json({ attempted, succeeded, failed: attempted - succeeded, errors: errors.slice(0, 5) });
+    } catch (e: any) {
+      res.status(500).json({ message: 'replay_failed', error: e?.message || String(e) });
+    }
+  });
+
   // Compliance: required health and status endpoints
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'ok' });
@@ -544,6 +701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/v1/status', async (_req: Request, res: Response) => {
     const start = Date.now();
     let version = process.env.APP_VERSION || 'unknown';
+    let dbOk = false;
     try {
       const fs = await import('fs');
       const path = await import('path');
@@ -552,6 +710,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const raw = fs.readFileSync(pkgPath, 'utf-8');
         const pkg = JSON.parse(raw);
         if (pkg?.version) version = pkg.version;
+      }
+      // Neon connectivity smoke test in non-production
+      if ((process.env.NODE_ENV || 'development') !== 'production') {
+        try {
+          const { db } = await import('./db');
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { sql } = await import('drizzle-orm');
+          const r = await db.execute(sql`select 1 as ok`);
+          dbOk = r?.rows?.[0]?.ok === 1;
+        } catch {}
       }
     } catch {}
 
@@ -567,7 +735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       uptimeSec: Math.floor(process.uptime()),
       mode: MODE,
       nodeEnv,
-      database: { configured: dbConfigured },
+      database: { configured: dbConfigured, reachable: dbOk },
       chittyConnect: { configured: !!(chittyBase && chittyAuth) },
       latencyMs: Date.now() - start,
     });

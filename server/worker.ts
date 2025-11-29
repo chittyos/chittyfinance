@@ -8,6 +8,7 @@ export interface Env {
   CHITTY_AUTH_SERVICE_TOKEN?: string
   API_ORIGIN?: string
   ASSETS: { fetch: (request: Request) => Promise<Response> }
+  CF_AGENT: DurableObjectNamespace
 }
 
 function json(data: unknown, init: ResponseInit = {}): Response {
@@ -20,35 +21,12 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Cloudflare Agent entrypoint (placeholder until full Agents integration)
-    // Requirement: agent should be available at /agent
-    if (path === '/agent') {
-      const html = `<!doctype html>
-        <html lang="en">
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>ChittyFinance Agent</title>
-          <style>
-            body { font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 40px; line-height: 1.5; }
-            code { padding: 2px 4px; background: #f5f5f5; border-radius: 4px; }
-            .muted { color: #666 }
-          </style>
-        </head>
-        <body>
-          <h1>ChittyFinance Agent</h1>
-          <p class="muted">System mode endpoint is reserved for Cloudflare Agents.</p>
-          <p>Docs: <a href="https://github.com/cloudflare/agents" target="_blank" rel="noreferrer">cloudflare/agents</a></p>
-          <p>Status:</p>
-          <pre>{
-  "mode": "${env.MODE || 'system'}",
-  "nodeEnv": "${env.NODE_ENV || 'production'}",
-  "provider": "cloudflare-agents (pending integration)",
-  "ready": false
-}</pre>
-        </body>
-        </html>`;
-      return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    // Cloudflare Agent entrypoint — forward to Durable Object agent
+    if (path === '/agent' || path.startsWith('/agent/')) {
+      const name = new URL(request.url).searchParams.get('id') || 'default';
+      const id = env.CF_AGENT.idFromName(name);
+      const stub = env.CF_AGENT.get(id);
+      return stub.fetch(request);
     }
 
     if (path === '/health') {
@@ -121,6 +99,35 @@ export default {
       return fetch(upstream.toString(), init);
     }
 
+    // Webhooks: Mercury -> forward to backend with service token
+    if (path === '/webhooks/mercury' && request.method === 'POST') {
+      const apiBase = env.API_ORIGIN || 'https://api.chitty.cc/finance';
+      const svcToken = env.CHITTY_AUTH_SERVICE_TOKEN || env.CHITTYCONNECT_API_TOKEN;
+      if (!svcToken) return new Response('missing service token', { status: 500 });
+      const body = await request.text();
+      // Optional HMAC verification (coordination with events API): ensure authenticity before forwarding
+      const secret = (env as any).MERCURY_WEBHOOK_SECRET as string | undefined;
+      const sig = request.headers.get('x-signature') || '';
+      if (secret) {
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+        const digest = Array.from(new Uint8Array(mac)).map(b => b.toString(16).padStart(2, '0')).join('');
+        if (!sig || sig !== digest) {
+          return new Response('invalid signature', { status: 401 });
+        }
+      }
+      const resp = await fetch(`${apiBase}/integrations/mercury/webhook`, {
+        method: 'POST',
+        headers: {
+          'content-type': request.headers.get('content-type') || 'application/json',
+          'authorization': `Bearer ${svcToken}`,
+        },
+        body,
+      });
+      return new Response(await resp.text(), { status: resp.status, headers: resp.headers });
+    }
+
     // Minimal redirect helpers to keep flows discoverable
     if (path === '/connect') {
       const target = env.CHITTYCONNECT_API_BASE?.replace(/\/?api\/?$/, '') || 'https://connect.chitty.cc';
@@ -136,3 +143,6 @@ export default {
     return new Response('Not Found', { status: 404 });
   }
 }
+
+// Re-export the Agent DO class so Wrangler can bind it
+export { ChittyAgent } from './agents/agent';
