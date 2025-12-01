@@ -2,6 +2,7 @@ import { Bell, MoreVertical } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/utils";
+import TenantSwitcher from "@/components/TenantSwitcher";
 
 export default function Header() {
   const currentDate = formatDate(new Date());
@@ -35,9 +36,11 @@ export default function Header() {
           </div>
         </div>
         
-        <div className="ml-4 flex items-center md:ml-6">
+        <div className="ml-4 flex items-center md:ml-6 gap-3">
+          <TenantSwitcher />
+
           <ThemeToggle />
-          
+
           <button className="ml-3 p-1 rounded-full text-muted-foreground hover:text-orange-500 dark:hover:text-orange-400 focus:outline-none transition-colors">
             <Bell className="h-6 w-6" />
           </button>

@@ -13,6 +13,7 @@ import Header from "@/components/layout/Header";
 import Connections from "@/pages/Connections";
 import { User } from "@shared/schema";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { TenantProvider } from "@/contexts/TenantContext";
 
 function Router() {
   const [location] = useLocation();
@@ -79,7 +80,9 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <Router />
+        <TenantProvider>
+          <Router />
+        </TenantProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );
