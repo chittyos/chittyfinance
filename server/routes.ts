@@ -8,6 +8,9 @@ import { getServiceBase } from "./lib/registry";
 import { getServiceAuthHeader } from "./lib/chitty-connect";
 import { z } from "zod";
 import { insertAiMessageSchema, insertIntegrationSchema, insertTaskSchema } from "@shared/schema";
+import { db } from "./db";
+import { eq, and, inArray } from "drizzle-orm";
+import * as schema from "../database/system.schema";
 import { getFinancialAdvice, generateCostReductionPlan } from "./lib/openai";
 import { getAggregatedFinancialData } from "./lib/financialServices";
 import { listMercuryAccounts } from "./lib/chittyConnect";
@@ -40,6 +43,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/register", (_req: Request, res: Response) => {
     const url = process.env.CHITTY_REGISTER_URL || "https://get.chitty.cc";
     res.redirect(302, url);
+  });
+
+  // System status endpoint (for mode detection)
+  api.get("/v1/status", (_req: Request, res: Response) => {
+    res.json({
+      mode: MODE,
+      version: "1.0.0",
+      env: process.env.NODE_ENV || 'development',
+    });
   });
 
   // Session endpoint
@@ -79,6 +91,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
       const transactions = await systemStorage.getTransactions(req.tenantId!, limit);
       res.json(transactions);
+    });
+
+    // Property management endpoints (system mode only)
+    api.get("/properties", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      try {
+        const properties = await db.select().from(schema.properties).where(eq(schema.properties.tenantId, req.tenantId!));
+        res.json(properties);
+      } catch (error) {
+        console.error("Error fetching properties:", error);
+        res.status(500).json({ error: "Failed to fetch properties" });
+      }
+    });
+
+    api.get("/properties/:id", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      try {
+        const [property] = await db
+          .select()
+          .from(schema.properties)
+          .where(and(eq(schema.properties.id, req.params.id), eq(schema.properties.tenantId, req.tenantId!)));
+
+        if (!property) {
+          return res.status(404).json({ error: "Property not found" });
+        }
+
+        res.json(property);
+      } catch (error) {
+        console.error("Error fetching property:", error);
+        res.status(500).json({ error: "Failed to fetch property" });
+      }
+    });
+
+    api.get("/properties/:id/units", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      try {
+        // Verify property belongs to current tenant
+        const [property] = await db
+          .select()
+          .from(schema.properties)
+          .where(and(eq(schema.properties.id, req.params.id), eq(schema.properties.tenantId, req.tenantId!)));
+
+        if (!property) {
+          return res.status(404).json({ error: "Property not found" });
+        }
+
+        const units = await db.select().from(schema.units).where(eq(schema.units.propertyId, req.params.id));
+        res.json(units);
+      } catch (error) {
+        console.error("Error fetching units:", error);
+        res.status(500).json({ error: "Failed to fetch units" });
+      }
+    });
+
+    api.get("/properties/:id/leases", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
+      try {
+        // Get units for this property
+        const units = await db.select().from(schema.units).where(eq(schema.units.propertyId, req.params.id));
+        const unitIds = units.map((u: any) => u.id);
+
+        if (unitIds.length === 0) {
+          return res.json([]);
+        }
+
+        // Get leases for these units
+        const leases = await db.select().from(schema.leases).where(inArray(schema.leases.unitId, unitIds));
+        res.json(leases);
+      } catch (error) {
+        console.error("Error fetching leases:", error);
+        res.status(500).json({ error: "Failed to fetch leases" });
+      }
     });
   }
 
