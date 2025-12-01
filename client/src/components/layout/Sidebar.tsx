@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Home, BarChart, DollarSign, FileText, Settings, Menu, Plug } from "lucide-react";
+import { Home, BarChart, DollarSign, FileText, Settings, Menu, Plug, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { TenantSwitcher } from "./TenantSwitcher";
@@ -71,15 +71,19 @@ export default function Sidebar() {
               <NavItem href="/" icon={<Home />} active={location === "/"}>
                 Dashboard
               </NavItem>
-              
+
+              <NavItem href="/properties" icon={<Building2 />} active={location === "/properties"}>
+                Properties
+              </NavItem>
+
               <NavItem href="/reports" icon={<BarChart />} active={location === "/reports"}>
                 Financial Reports
               </NavItem>
-              
+
               <NavItem href="/cash-flow" icon={<DollarSign />} active={location === "/cash-flow"}>
                 Cash Flow
               </NavItem>
-              
+
               <NavItem href="/invoices" icon={<FileText />} active={location === "/invoices"}>
                 Invoices
               </NavItem>
