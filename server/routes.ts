@@ -1,7 +1,6 @@
 import express, { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { systemStorage } from "./storage-system";
 import { chittyConnectAuth, serviceAuth } from "./middleware/auth";
 import { resolveTenant } from "./middleware/tenant";
 import { getServiceBase } from "./lib/registry";
@@ -73,24 +72,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     api.get("/tenants", chittyConnectAuth, async (req: Request, res: Response) => {
       const userId = req.userId || (await storage.getSessionUser())?.id;
       if (!userId) return res.status(401).json({ error: 'Authentication required' });
-      const tenants = await systemStorage.getUserTenants(String(userId));
+      const tenants = await storage.getUserTenants(String(userId));
       res.json(tenants);
     });
 
     api.get("/tenants/:id", chittyConnectAuth, async (req: Request, res: Response) => {
-      const tenant = await systemStorage.getTenant(req.params.id);
+      const tenant = await storage.getTenant(req.params.id);
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
       res.json(tenant);
     });
 
     api.get("/accounts", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
-      const accounts = await systemStorage.getAccounts(req.tenantId!);
+      if (!storage.getAccounts) {
+        return res.status(501).json({ error: 'Accounts not supported in this mode' });
+      }
+      const accounts = await storage.getAccounts(req.tenantId!);
       res.json(accounts);
     });
 
     api.get("/transactions", chittyConnectAuth, resolveTenant, async (req: Request, res: Response) => {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-      const transactions = await systemStorage.getTransactions(req.tenantId!, limit);
+      const transactions = await storage.getTransactions(req.tenantId!, limit);
       res.json(transactions);
     });
 
@@ -171,22 +173,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Get financial summary
-    let summary = await storage.getFinancialSummary(user.id);
+    // Get financial summary (only available in standalone mode)
+    if (storage.getFinancialSummary) {
+      let summary = await storage.getFinancialSummary(toStringId(user.id));
 
-    if (!summary) {
-      // If no summary exists, we'd typically fetch from external services
-      // For demo, create a new summary record
-      summary = await storage.createFinancialSummary({
-        userId: user.id,
-        cashOnHand: 127842.50,
-        monthlyRevenue: 43291.75,
-        monthlyExpenses: 26142.30,
-        outstandingInvoices: 18520.00,
-      });
+      if (!summary && storage.createFinancialSummary) {
+        // If no summary exists, we'd typically fetch from external services
+        // For demo, create a new summary record
+        summary = await storage.createFinancialSummary({
+          userId: typeof user.id === 'number' ? user.id : parseInt(user.id, 10),
+          cashOnHand: 127842.50,
+          monthlyRevenue: 43291.75,
+          monthlyExpenses: 26142.30,
+          outstandingInvoices: 18520.00,
+        });
+      }
+
+      return res.json(summary);
     }
 
-    res.json(summary);
+    // System mode: financial summary not supported yet
+    res.status(501).json({ message: "Financial summary not available in system mode" });
   });
 
   // Get integrations (multi-tenant aware)
@@ -338,10 +345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update integration
   api.patch("/integrations/:id", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid integration ID" });
-      }
+      const id = req.params.id;
 
       const integration = await storage.getIntegration(id);
       if (!integration) {
@@ -442,7 +446,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const business = businesses[0];
 
       // Check if integration already exists
-      const integrations = await storage.getIntegrations(userId);
+      const integrations = await storage.getIntegrations(toStringId(userId));
       let integration = integrations.find(i => i.serviceType === 'wavapps');
 
       const credentials = {
@@ -602,9 +606,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const messages = await storage.getAiMessages(user.id, 1);
+    const userId = toStringId(user.id);
+    const messages = await storage.getAiMessages(userId, userId, 1);
     const latestMessage = messages.length > 0 ? messages[0] : null;
-    
+
     res.json(latestMessage || { content: "I'm your AI CFO assistant. How can I help you today?" });
   });
 
@@ -621,21 +626,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Query is required" });
       }
 
+      const userId = toStringId(user.id);
+
       // Store user message
       await storage.createAiMessage({
-        userId: user.id,
+        userId: typeof user.id === 'number' ? user.id : parseInt(user.id, 10),
+        tenantId: typeof user.id === 'number' ? user.id : parseInt(user.id, 10),
         content: query,
         role: "user"
       });
 
-      // Get financial data
-      const summary = await storage.getFinancialSummary(user.id);
+      // Get financial data (standalone mode only)
+      if (!storage.getFinancialSummary) {
+        return res.status(501).json({ message: "AI assistant not available in system mode yet" });
+      }
+
+      const summary = await storage.getFinancialSummary(userId);
       if (!summary) {
         return res.status(404).json({ message: "Financial summary not found" });
       }
 
       // Get previous assistant message for context
-      const previousMessages = await storage.getAiMessages(user.id, 2);
+      const previousMessages = await storage.getAiMessages(userId, userId, 2);
       const previousAssistantMessage = previousMessages.find(m => m.role === "assistant")?.content;
 
       // Get AI response
@@ -671,8 +683,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Get financial data
-      const summary = await storage.getFinancialSummary(user.id);
+      // Get financial data (standalone mode only)
+      if (!storage.getFinancialSummary) {
+        return res.status(501).json({ message: "Cost reduction plan not available in system mode yet" });
+      }
+
+      const summary = await storage.getFinancialSummary(toStringId(user.id));
       if (!summary) {
         return res.status(404).json({ message: "Financial summary not found" });
       }
