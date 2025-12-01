@@ -7,6 +7,7 @@ import Dashboard from "@/pages/Dashboard";
 import Settings from "@/pages/Settings";
 import Landing from "@/pages/Landing";
 import NotFound from "@/pages/not-found";
+import ValuationConsole from "@/pages/ValuationConsole";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
 import Connections from "@/pages/Connections";
@@ -37,6 +38,7 @@ function Router() {
         <main className="flex-1 relative overflow-y-auto focus:outline-none">
           <Switch>
             <Route path="/" component={Dashboard} />
+            <Route path="/valuation/550-w-surf-504" component={ValuationConsole} />
             <Route path="/connections" component={Connections} />
             <Route path="/settings" component={Settings} />
             <Route component={NotFound} />

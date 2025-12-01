@@ -255,6 +255,9 @@ export default function Connections() {
                               )}
                             </Button>
                           )}
+                          {config.type === 'stripe' && (
+                            <StripeActions />
+                          )}
                         </>
                       )}
                       <Button
@@ -316,4 +319,36 @@ export default function Connections() {
       </Card>
     </div>
   );
+}
+
+function StripeActions() {
+  const [amount, setAmount] = useState<string>('2000')
+  const [pending, setPending] = useState(false)
+
+  const connect = async () => {
+    try {
+      setPending(true)
+      const r = await fetch('/api/integrations/stripe/connect', { method: 'POST' })
+      if (!r.ok) throw new Error('Stripe connect failed')
+    } finally { setPending(false) }
+  }
+
+  const checkout = async () => {
+    try {
+      setPending(true)
+      const cents = parseInt(amount, 10)
+      if (!Number.isFinite(cents) || cents < 50) return alert('Enter amount in cents (>=50)')
+      const r = await fetch('/api/integrations/stripe/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ amountCents: cents, label: 'ChittyFinance Payment', purpose: 'test' }) })
+      if (!r.ok) throw new Error('Failed to create checkout')
+      const data = await r.json(); if (data.url) window.location.href = data.url
+    } finally { setPending(false) }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <input className="border rounded px-2 py-1 w-40" placeholder="Amount (cents)" value={amount} onChange={(e)=>setAmount(e.target.value)} />
+      <Button disabled={pending} onClick={checkout}>Create Payment</Button>
+      <Button variant="secondary" disabled={pending} onClick={connect}>Connect</Button>
+    </div>
+  )
 }

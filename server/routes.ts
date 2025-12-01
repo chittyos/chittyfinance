@@ -13,6 +13,7 @@ import { getAggregatedFinancialData } from "./lib/financialServices";
 import { listMercuryAccounts } from "./lib/chittyConnect";
 import { createWaveClient } from "./lib/wave-api";
 import { getRecurringCharges, getChargeOptimizations, manageRecurringCharge } from "./lib/chargeAutomation";
+import { ensureCustomerForTenant, createCheckoutSession, verifyWebhook } from "./lib/stripe";
 import {
   fetchUserRepositories,
   fetchRepositoryCommits,
@@ -113,6 +114,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const integrations = await storage.getIntegrations(user.id);
     res.json(integrations);
+  });
+
+  // Stripe connect: create/fetch customer and mark connected
+  api.post("/integrations/stripe/connect", chittyConnectAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getSessionUser();
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      const tenantId = (req as any).tenantId || String(user.id);
+      const customerId = await ensureCustomerForTenant({ tenantId, tenantName: user.displayName, email: user.email });
+      // Upsert integration record
+      const integrations = await storage.getIntegrations(user.id);
+      let stripeInt = integrations.find(i => i.serviceType === 'stripe');
+      if (!stripeInt) {
+        stripeInt = await storage.createIntegration({
+          userId: user.id,
+          serviceType: 'stripe',
+          name: 'Stripe',
+          connected: true,
+          credentials: { customerId, tenantId },
+          description: 'Payments',
+          lastSynced: new Date(),
+        });
+      } else {
+        stripeInt = await storage.updateIntegration(stripeInt.id, {
+          connected: true,
+          credentials: { ...(stripeInt.credentials||{}), customerId, tenantId },
+          lastSynced: new Date(),
+        }) as any;
+      }
+      res.json({ connected: true, customerId });
+    } catch (e: any) {
+      console.error('Stripe connect error', e);
+      res.status(500).json({ message: 'Failed to connect Stripe' });
+    }
+  });
+
+  // Stripe checkout: create ad-hoc session for custom amount
+  api.post("/integrations/stripe/checkout", chittyConnectAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getSessionUser();
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      const body = req.body as any;
+      const amountCents = Number(body?.amountCents);
+      if (!Number.isFinite(amountCents) || amountCents < 50) {
+        return res.status(400).json({ message: 'amountCents must be >= 50' });
+      }
+      const label = String(body?.label || 'ChittyFinance Payment');
+      const purpose = String(body?.purpose || 'test');
+      const tenantId = (req as any).tenantId || String(user.id);
+      const integrations = await storage.getIntegrations(user.id);
+      let stripeInt = integrations.find(i => i.serviceType === 'stripe');
+      let customerId = (stripeInt?.credentials as any)?.customerId as string | undefined;
+      if (!customerId) {
+        customerId = await ensureCustomerForTenant({ tenantId, tenantName: user.displayName, email: user.email });
+      }
+      const idempotencyKey = `checkout:${tenantId}:${Date.now()}`;
+      const session = await createCheckoutSession({ tenantId, customerId, amountCents, label, purpose, idempotencyKey });
+      res.json({ url: session.url, id: session.id });
+    } catch (e: any) {
+      console.error('Stripe checkout error', e);
+      res.status(500).json({ message: 'Failed to create checkout session' });
+    }
   });
 
   // Mercury account discovery via ChittyConnect (multi-account support)
@@ -718,6 +781,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api", api);
 
   // Service webhook endpoint (from Worker)
+  // Stripe webhook (raw body needed for signature verification)
+  app.post('/api/integrations/stripe/webhook', express.raw({ type: 'application/json' }), async (req: any, res: Response) => {
+    try {
+      const signature = req.headers['stripe-signature'];
+      const event = verifyWebhook(req.body, signature);
+
+      // Idempotency: record event using existing webhook store
+      const eventId = event.id;
+      const duplicate = await storage.isWebhookDuplicate('stripe', eventId);
+      if (!duplicate) {
+        await storage.recordWebhookEvent({ source: 'stripe', eventId, payload: event as any });
+      }
+
+      switch (event.type) {
+        case 'checkout.session.completed':
+        case 'payment_intent.succeeded':
+        case 'payment_intent.payment_failed':
+        case 'payment_intent.canceled':
+          // For now, we just acknowledge and rely on events log
+          break;
+      }
+      return res.json({ received: true });
+    } catch (err) {
+      console.error('Stripe webhook error', err);
+      return res.status(400).send(`Webhook Error`);
+    }
+  });
+
   app.post("/api/integrations/mercury/webhook", serviceAuth, async (req: Request, res: Response) => {
     try {
       const eventId = (req.headers['x-event-id'] as string) || (req.body && (req.body.id || req.body.eventId));

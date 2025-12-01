@@ -17,7 +17,9 @@
       "Bash(npm run deploy:*)",
       "Bash(npm test:*)",
       "Bash(npm install:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(pkill:*)",
+      "Bash(open -a \"Google Drive\")"
     ],
     "deny": []
   }
