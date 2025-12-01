@@ -26,6 +26,7 @@ import {
 import { generateOAuthState, validateOAuthState } from "./lib/oauth-state";
 import { requireIntegration } from "./lib/integration-validation";
 import * as storageHelpers from "./lib/storage-helpers";
+import { toStringId } from "./lib/id-compat";
 
 const MODE = process.env.MODE || 'standalone';
 
