@@ -329,26 +329,50 @@ api.get("/session", async (req: Request, res: Response) => {
 - `GET /api/recurring-charges/:id/optimizations` - Get optimization suggestions
 - `POST /api/recurring-charges/:id/manage` - Execute management action
 
-### 5. Third-Party Integrations
+### 5. Third-Party Integrations (Phase 3 - COMPLETED)
 
-**Status**: All integrations return **mock data** (not real API calls).
+**Mercury Bank** (`server/lib/financialServices.ts:22-51`, via ChittyConnect):
+- **Real integration** through ChittyConnect backend
+- Multi-account support with account selection
+- Static egress IP for bank compliance
+- Fetches balances and transactions
+- Falls back to minimal data in standalone mode
+- Routes: `/api/mercury/accounts`, `/api/mercury/select-accounts`
+- Configuration: Requires `CHITTYCONNECT_API_BASE` + `CHITTYCONNECT_API_TOKEN`
 
-**Mercury Bank** (`server/lib/financialServices.ts:20-46`):
-- Mock cash on hand and transactions
-- Would connect to Mercury API in production
+**Wave Accounting** (`server/lib/wave-api.ts` + `server/lib/financialServices.ts:54-116`):
+- **Real integration** via OAuth 2.0 + GraphQL API
+- Complete OAuth flow with CSRF protection (HMAC-signed state tokens)
+- Fetches invoices, expenses, and financial summaries
+- Automatic token refresh support
+- Routes: `/api/integrations/wave/authorize`, `/callback`, `/refresh`
+- Requirements: Wave Pro subscription, `WAVE_CLIENT_ID`, `WAVE_CLIENT_SECRET`
+- Security: Uses `server/lib/oauth-state.ts` for secure state token generation/validation
 
-**Wave Accounting** (`server/lib/financialServices.ts:49+`):
-- Mock invoice and expense data
-- Would connect to Wave API in production
+**Stripe** (`server/lib/stripe.ts`):
+- **Real integration** for payment processing
+- Customer management with tenant metadata
+- Checkout session creation (ad-hoc payments)
+- Webhook verification and idempotent event processing
+- Routes: `/api/integrations/stripe/connect`, `/checkout`, `/webhook`
+- Configuration: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- Events stored in `webhook_events` table (see `shared/finance.schema.ts`)
 
-**Stripe**:
-- Configured but not actively used
-- Requires `STRIPE_SECRET_KEY` environment variable
+**DoorLoop** (`server/lib/financialServices.ts:119-147`):
+- **Mock data** (property management)
+- Returns hardcoded rent roll and maintenance data
+- Real API integration pending
 
 **GitHub** (`server/lib/github.ts`):
 - Real GitHub API integration (not mock)
 - Fetches repositories, commits, PRs, issues
 - Used for project cost attribution
+
+**Integration Status Monitoring**:
+- New endpoint: `GET /api/integrations/status` (server/routes.ts:122-126)
+- Validates which integrations are properly configured
+- Uses `server/lib/integration-validation.ts` to check environment variables
+- Returns configuration status for wave, stripe, mercury, openai
 
 ## Utilities
 
@@ -438,8 +462,26 @@ import logo from "@assets/logo.png";
 
 ### Integrations
 - `GET /api/integrations` - List configured integrations
+- `GET /api/integrations/status` - Check which integrations are properly configured
 - `POST /api/integrations` - Add new integration
 - `PATCH /api/integrations/:id` - Update integration credentials
+- `GET /api/integrations/events` - List webhook events with optional source filter
+- `POST /api/admin/events/replay` - Replay webhook events to ChittyOS services
+
+#### Wave Accounting
+- `GET /api/integrations/wave/authorize` - Start OAuth flow (returns authorization URL)
+- `GET /api/integrations/wave/callback` - OAuth callback handler (redirects to /connections)
+- `POST /api/integrations/wave/refresh` - Refresh expired access token
+
+#### Stripe
+- `POST /api/integrations/stripe/connect` - Create/fetch Stripe customer
+- `POST /api/integrations/stripe/checkout` - Create ad-hoc payment session
+- `POST /api/integrations/stripe/webhook` - Stripe webhook endpoint (signature verified)
+
+#### Mercury Bank
+- `GET /api/mercury/accounts` - List available Mercury accounts via ChittyConnect
+- `POST /api/mercury/select-accounts` - Select which accounts to sync
+- `POST /api/integrations/mercury/webhook` - Mercury webhook endpoint (authenticated)
 
 ### Recurring Charges
 - `GET /api/recurring-charges` - List recurring charges from integrations
@@ -472,18 +514,47 @@ import logo from "@assets/logo.png";
 DATABASE_URL="postgresql://user:pass@host/dbname"
 ```
 
-**API Keys** (optional for development):
-```bash
-OPENAI_API_KEY="sk-..."       # Required for AI features
-MERCURY_API_KEY="..."         # Not used (mock data only)
-WAVE_API_TOKEN="..."          # Not used (mock data only)
-STRIPE_SECRET_KEY="..."       # Configured but not actively used
-GITHUB_TOKEN="..."            # Required for GitHub integration
-```
-
 **Application**:
 ```bash
-NODE_ENV="development"        # or "production"
+NODE_ENV="development"                              # or "production"
+MODE="standalone"                                   # or "system" (multi-tenant)
+PUBLIC_APP_BASE_URL="http://localhost:5000"        # Base URL for OAuth redirects
+```
+
+**OAuth Security** (required for production):
+```bash
+OAUTH_STATE_SECRET="random-secret-32chars"         # HMAC secret for OAuth state tokens
+```
+
+**AI & OpenAI** (optional for development, required for AI features):
+```bash
+OPENAI_API_KEY="sk-..."                            # Required for AI financial advice
+```
+
+**Wave Accounting** (Phase 3 - Real Integration):
+```bash
+WAVE_CLIENT_ID="..."                               # OAuth client ID from Wave Developer Portal
+WAVE_CLIENT_SECRET="..."                           # OAuth client secret
+WAVE_REDIRECT_URI="http://localhost:5000/api/integrations/wave/callback"  # Optional, defaults to PUBLIC_APP_BASE_URL/api/integrations/wave/callback
+```
+
+**Stripe** (Phase 3 - Real Integration):
+```bash
+STRIPE_SECRET_KEY="sk_test_..."                    # Stripe secret key (test or live)
+STRIPE_PUBLISHABLE_KEY="pk_test_..."               # Stripe publishable key (optional, frontend)
+STRIPE_WEBHOOK_SECRET="whsec_..."                  # Webhook signing secret for verification
+```
+
+**Mercury Bank** (Phase 3 - Real Integration via ChittyConnect):
+```bash
+CHITTYCONNECT_API_BASE="https://connect.chitty.cc"  # ChittyConnect backend URL
+CHITTYCONNECT_API_TOKEN="..."                       # Service authentication token
+CHITTY_CONNECT_URL="https://connect.chitty.cc"      # Frontend redirect URL (optional)
+```
+
+**GitHub** (optional):
+```bash
+GITHUB_TOKEN="ghp_..."                             # Required for GitHub integration
 ```
 
 ### Local Development Setup

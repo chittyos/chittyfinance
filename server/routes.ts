@@ -20,6 +20,8 @@ import {
   fetchRepositoryPullRequests,
   fetchRepositoryIssues
 } from "./lib/github";
+import { generateOAuthState, validateOAuthState } from "./lib/oauth-state";
+import { requireIntegration } from "./lib/integration-validation";
 
 const MODE = process.env.MODE || 'standalone';
 
@@ -114,6 +116,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const integrations = await storage.getIntegrations(user.id);
     res.json(integrations);
+  });
+
+  // Get integration configuration status
+  api.get("/integrations/status", chittyConnectAuth, async (req: Request, res: Response) => {
+    const { validateAllIntegrations } = await import("./lib/integration-validation");
+    const status = validateAllIntegrations();
+    res.json(status);
   });
 
   // Stripe connect: create/fetch customer and mark connected
@@ -267,6 +276,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Wave OAuth endpoints
   api.get("/integrations/wave/authorize", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
+      // Validate Wave credentials are configured
+      requireIntegration('wave');
+
       const user = await storage.getSessionUser();
       if (!user) {
         return res.status(401).json({ message: "User not found" });
@@ -274,13 +286,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create Wave client
       const waveClient = createWaveClient({
-        clientId: process.env.WAVE_CLIENT_ID || '',
-        clientSecret: process.env.WAVE_CLIENT_SECRET || '',
+        clientId: process.env.WAVE_CLIENT_ID!,
+        clientSecret: process.env.WAVE_CLIENT_SECRET!,
         redirectUri: process.env.WAVE_REDIRECT_URI || `${process.env.PUBLIC_APP_BASE_URL}/api/integrations/wave/callback`,
       });
 
-      // Generate state token for CSRF protection
-      const state = Buffer.from(JSON.stringify({ userId: user.id })).toString('base64');
+      // Generate secure state token with CSRF protection
+      const state = generateOAuthState(user.id);
 
       // Get authorization URL
       const authUrl = waveClient.getAuthorizationUrl(state);
@@ -288,21 +300,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ authUrl });
     } catch (error) {
       console.error('Wave authorization error:', error);
+
+      if (error instanceof Error) {
+        // Return specific error message for configuration issues
+        if (error.message.includes('not configured')) {
+          return res.status(503).json({
+            message: "Wave integration not configured",
+            details: error.message
+          });
+        }
+      }
+
       res.status(500).json({ message: "Failed to start Wave authorization" });
     }
   });
 
   api.get("/integrations/wave/callback", async (req: Request, res: Response) => {
     try {
-      const { code, state } = req.query;
+      const { code, state, error } = req.query;
 
-      if (!code || !state) {
-        return res.status(400).json({ message: "Missing authorization code or state" });
+      // Handle OAuth errors
+      if (error) {
+        console.error('Wave OAuth error:', error);
+        return res.redirect(`${process.env.PUBLIC_APP_BASE_URL}/connections?wave=error&reason=${error}`);
       }
 
-      // Verify state and extract user ID
-      const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
-      const userId = stateData.userId;
+      if (!code || !state) {
+        return res.redirect(`${process.env.PUBLIC_APP_BASE_URL}/connections?wave=error&reason=missing_params`);
+      }
+
+      // Validate and extract state data
+      const stateData = validateOAuthState(state as string);
+      if (!stateData) {
+        console.error('Wave OAuth: Invalid or expired state token');
+        return res.redirect(`${process.env.PUBLIC_APP_BASE_URL}/connections?wave=error&reason=invalid_state`);
+      }
+
+      const userId = typeof stateData.userId === 'string' ? parseInt(stateData.userId, 10) : stateData.userId;
 
       // Create Wave client
       const waveClient = createWaveClient({
