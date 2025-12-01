@@ -22,6 +22,7 @@ import {
 } from "./lib/github";
 import { generateOAuthState, validateOAuthState } from "./lib/oauth-state";
 import { requireIntegration } from "./lib/integration-validation";
+import * as storageHelpers from "./lib/storage-helpers";
 
 const MODE = process.env.MODE || 'standalone';
 
@@ -107,15 +108,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(summary);
   });
 
-  // Get integrations
+  // Get integrations (multi-tenant aware)
   api.get("/integrations", chittyConnectAuth, async (req: Request, res: Response) => {
-    const user = await storage.getSessionUser();
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    try {
+      const integrations = await storageHelpers.getIntegrations(req);
+      res.json(integrations);
+    } catch (error) {
+      console.error("Error fetching integrations:", error);
+      res.status(500).json({ message: "Failed to fetch integrations" });
     }
-
-    const integrations = await storage.getIntegrations(user.id);
-    res.json(integrations);
   });
 
   // Get integration configuration status
@@ -457,69 +458,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(transactions);
   });
 
-  // Get tasks
+  // Get tasks (multi-tenant aware)
   api.get("/tasks", chittyConnectAuth, async (req: Request, res: Response) => {
-    const user = await storage.getSessionUser();
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const tasks = await storageHelpers.getTasks(req, limit);
+      res.json(tasks);
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+      res.status(500).json({ message: "Failed to fetch tasks" });
     }
-
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-    const tasks = await storage.getTasks(user.id, limit);
-    
-    res.json(tasks);
   });
 
-  // Create task
+  // Create task (multi-tenant aware)
   api.post("/tasks", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
-      const user = await storage.getSessionUser();
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      const data = insertTaskSchema.parse({ ...req.body, userId: user.id });
-      const task = await storage.createTask(data);
+      const task = await storageHelpers.createTask(req, req.body);
       res.status(201).json(task);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: "Invalid task data", errors: error.errors });
       }
+      console.error("Error creating task:", error);
       res.status(500).json({ message: "Failed to create task" });
     }
   });
 
-  // Update task
+  // Update task (multi-tenant aware)
   api.patch("/tasks/:id", chittyConnectAuth, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid task ID" });
-      }
+      const id = req.params.id;
+      const task = await storageHelpers.getTask(req, id);
 
-      const task = await storage.getTask(id);
       if (!task) {
         return res.status(404).json({ message: "Task not found" });
       }
 
-      const updatedTask = await storage.updateTask(id, req.body);
+      const updatedTask = await storageHelpers.updateTask(req, id, req.body);
       res.json(updatedTask);
     } catch (error) {
+      console.error("Error updating task:", error);
       res.status(500).json({ message: "Failed to update task" });
     }
   });
 
-  // Get AI messages
+  // Get AI messages (multi-tenant aware)
   api.get("/ai-messages", chittyConnectAuth, async (req: Request, res: Response) => {
-    const user = await storage.getSessionUser();
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const messages = await storageHelpers.getAiMessages(req, limit);
+      res.json(messages);
+    } catch (error) {
+      console.error("Error fetching AI messages:", error);
+      res.status(500).json({ message: "Failed to fetch AI messages" });
     }
-
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-    const messages = await storage.getAiMessages(user.id, limit);
-    
-    res.json(messages);
   });
 
   // Get latest AI assistant message
