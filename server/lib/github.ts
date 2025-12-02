@@ -96,52 +96,19 @@ export async function fetchUserRepositories(integration: Integration): Promise<G
  */
 export async function fetchRepositoryCommits(integration: Integration, repoFullName: string): Promise<GitHubCommit[]> {
   try {
-    const token = process.env.GITHUB_SHITTYBOT_TOKEN;
-    if (!token) {
-      console.error('GitHub token not found in environment variables');
-      return [];
+    if (!getGithubToken()) {
+      throw new Error("GitHub token not available");
     }
 
-    // In a real app, this would make an API call to the GitHub API
-    // For demo purposes, return mock data based on the repository name
-    const commits: GitHubCommit[] = [
-      {
-        id: 'a1b2c3d4e5f6',
-        message: 'Fix dashboard layout and improve mobile responsiveness',
-        author: 'johnsmith',
-        date: new Date(Date.now() - 3600000), // 1 hour ago
-        url: `https://github.com/${repoFullName}/commit/a1b2c3d4e5f6`,
-      },
-      {
-        id: 'b2c3d4e5f6g7',
-        message: 'Add transaction filtering and sorting functionality\n\nThis commit adds the ability to filter transactions by date, amount, and category, as well as sort them in ascending or descending order.',
-        author: 'sarahjones',
-        date: new Date(Date.now() - 7200000), // 2 hours ago
-        url: `https://github.com/${repoFullName}/commit/b2c3d4e5f6g7`,
-      },
-      {
-        id: 'c3d4e5f6g7h8',
-        message: 'Integrate OpenAI for financial insights',
-        author: 'robertwilson',
-        date: new Date(Date.now() - 10800000), // 3 hours ago
-        url: `https://github.com/${repoFullName}/commit/c3d4e5f6g7h8`,
-      },
-      {
-        id: 'd4e5f6g7h8i9',
-        message: 'Update dependencies and fix security vulnerabilities',
-        author: 'amandabrown',
-        date: new Date(Date.now() - 14400000), // 4 hours ago
-        url: `https://github.com/${repoFullName}/commit/d4e5f6g7h8i9`,
-      },
-      {
-        id: 'e5f6g7h8i9j0',
-        message: 'Refactor API endpoints for better performance',
-        author: 'michaelgreen',
-        date: new Date(Date.now() - 18000000), // 5 hours ago
-        url: `https://github.com/${repoFullName}/commit/e5f6g7h8i9j0`,
-      }
-    ];
+    const response = await fetch(`https://api.github.com/repos/${repoFullName}/commits?per_page=5`, {
+      headers: githubHeaders(),
+    });
 
+    if (!response.ok) {
+      throw new Error(`GitHub API error: ${response.status}`);
+    }
+
+    const commits = await response.json();
     return commits;
   } catch (error) {
     console.error(`Error fetching commits for repository ${repoFullName}:`, error);
@@ -154,44 +121,20 @@ export async function fetchRepositoryCommits(integration: Integration, repoFullN
  */
 export async function fetchRepositoryPullRequests(integration: Integration, repoFullName: string): Promise<GitHubPullRequest[]> {
   try {
-    const token = process.env.GITHUB_SHITTYBOT_TOKEN;
-    if (!token) {
-      console.error('GitHub token not found in environment variables');
-      return [];
+    if (!getGithubToken()) {
+      throw new Error("GitHub token not available");
     }
 
-    // Mock data for demo purposes
-    const pullRequests: GitHubPullRequest[] = [
-      {
-        id: 123,
-        title: 'Implement transaction export to CSV/Excel',
-        state: 'open',
-        author: 'sarahjones',
-        createdAt: new Date(Date.now() - 86400000), // 1 day ago
-        updatedAt: new Date(Date.now() - 43200000), // 12 hours ago
-        url: `https://github.com/${repoFullName}/pull/123`,
-      },
-      {
-        id: 122,
-        title: 'Add financial summary charts',
-        state: 'merged',
-        author: 'johnsmith',
-        createdAt: new Date(Date.now() - 172800000), // 2 days ago
-        updatedAt: new Date(Date.now() - 86400000), // 1 day ago
-        url: `https://github.com/${repoFullName}/pull/122`,
-      },
-      {
-        id: 121,
-        title: 'Fix authentication issues',
-        state: 'closed',
-        author: 'robertwilson',
-        createdAt: new Date(Date.now() - 259200000), // 3 days ago
-        updatedAt: new Date(Date.now() - 172800000), // 2 days ago
-        url: `https://github.com/${repoFullName}/pull/121`,
-      }
-    ];
+    const response = await fetch(`https://api.github.com/repos/${repoFullName}/pulls?per_page=5`, {
+      headers: githubHeaders(),
+    });
 
-    return pullRequests;
+    if (!response.ok) {
+      throw new Error(`GitHub API error: ${response.status}`);
+    }
+
+    const pulls = await response.json();
+    return pulls;
   } catch (error) {
     console.error(`Error fetching pull requests for repository ${repoFullName}:`, error);
     return [];
