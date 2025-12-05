@@ -201,7 +201,7 @@ export const forensicTransactionAnalysis = pgTable("forensic_transaction_analysi
   investigationId: integer("investigation_id").notNull().references(() => forensicInvestigations.id),
   transactionId: integer("transaction_id").references(() => transactions.id),
   transactionDate: timestamp("transaction_date"),
-  transactionAmount: real("transaction_amount"),
+  transactionAmount: numeric("transaction_amount", { precision: 12, scale: 2 }),
   transactionDescription: text("transaction_description"),
   riskLevel: text("risk_level").notNull(), // 'high', 'medium', 'low'
   legitimacyAssessment: text("legitimacy_assessment"), // 'proper', 'questionable', 'improper', 'unable_to_determine'
@@ -261,7 +261,7 @@ export const forensicFlowOfFunds = pgTable("forensic_flow_of_funds", {
   flowName: text("flow_name").notNull(),
   sourceAccount: text("source_account").notNull(),
   destinationAccount: text("destination_account").notNull(),
-  amount: real("amount").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   transactionDate: timestamp("transaction_date"),
   transferMethod: text("transfer_method"), // 'wire', 'check', 'ach', 'cash', 'other'
   intermediaries: jsonb("intermediaries"), // Array of intermediate accounts/entities

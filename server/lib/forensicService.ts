@@ -96,6 +96,24 @@ export interface FlowOfFundsTrace {
 }
 
 // ============================================================================
+// Authorization Helper
+// ============================================================================
+
+export async function verifyInvestigationOwnership(
+  investigationId: number,
+  userId: number
+): Promise<ForensicInvestigation | null> {
+  const investigation = await getInvestigation(investigationId);
+  if (!investigation) {
+    return null;
+  }
+  if (investigation.userId !== userId) {
+    return null;
+  }
+  return investigation;
+}
+
+// ============================================================================
 // Investigation Management
 // ============================================================================
 
@@ -317,7 +335,10 @@ export async function detectDuplicatePayments(
   const seen = new Map<string, number[]>();
 
   for (const transaction of userTransactions) {
-    const key = `${transaction.amount}_${transaction.description || 'none'}_${transaction.date?.toISOString().split('T')[0]}`;
+    // Guard against missing dates - skip transactions without dates
+    if (!transaction.date) continue;
+
+    const key = `${transaction.amount}_${transaction.description || 'none'}_${transaction.date.toISOString().split('T')[0]}`;
 
     if (!seen.has(key)) {
       seen.set(key, [transaction.id]);
@@ -423,10 +444,15 @@ export async function detectRoundDollarAnomalies(
     }
   }
 
+  const anomalies: AnomalyDetectionResult[] = [];
+
+  // Guard against division by zero
+  if (userTransactions.length === 0) {
+    return anomalies;
+  }
+
   // Calculate percentage of round amounts
   const roundPercentage = (roundTransactions.length / userTransactions.length) * 100;
-
-  const anomalies: AnomalyDetectionResult[] = [];
 
   // If more than 30% are round amounts, flag as anomalous
   if (roundPercentage > 30) {
@@ -478,6 +504,22 @@ export function analyzeBenfordsLaw(amounts: number[]): BenfordAnalysisResult[] {
   const total = Object.values(digitCounts).reduce((a, b) => a + b, 0);
   const results: BenfordAnalysisResult[] = [];
   let totalChiSquare = 0;
+
+  // Guard against division by zero
+  if (total === 0) {
+    // Return empty results if no valid amounts
+    for (let digit = 1; digit <= 9; digit++) {
+      results.push({
+        digit,
+        observed: 0,
+        expected: expected[digit as keyof typeof expected],
+        deviation: -expected[digit as keyof typeof expected],
+        chiSquare: 0,
+        passed: false
+      });
+    }
+    return results;
+  }
 
   for (let digit = 1; digit <= 9; digit++) {
     const observed = (digitCounts[digit] / total) * 100;

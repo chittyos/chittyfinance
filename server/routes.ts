@@ -44,7 +44,8 @@ import {
   generateExecutiveSummary,
   createForensicReport,
   getForensicReports,
-  runComprehensiveAnalysis
+  runComprehensiveAnalysis,
+  verifyInvestigationOwnership
 } from "./lib/forensicService";
 import { generateOAuthState, validateOAuthState } from "./lib/oauth-state";
 import { requireIntegration } from "./lib/integration-validation";
@@ -52,7 +53,47 @@ import * as storageHelpers from "./lib/storage-helpers";
 import { toStringId } from "./lib/id-compat";
 import { transformToUniversalFormat } from "./lib/universal";
 import { isAuthenticated } from "./middleware/auth";
+
 const MODE = process.env.MODE || 'standalone';
+
+// Forensic investigation validation schemas and constants
+const ALLOWED_INVESTIGATION_STATUSES = ['open', 'in_progress', 'completed', 'closed'] as const;
+
+const createInvestigationSchema = z.object({
+  caseNumber: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  allegations: z.string().optional(),
+  investigationPeriodStart: z.string().datetime().optional(),
+  investigationPeriodEnd: z.string().datetime().optional(),
+  status: z.enum(ALLOWED_INVESTIGATION_STATUSES).optional(),
+  leadInvestigator: z.string().optional(),
+  metadata: z.any().optional()
+});
+
+const updateStatusSchema = z.object({
+  status: z.enum(ALLOWED_INVESTIGATION_STATUSES)
+});
+
+const addEvidenceSchema = z.object({
+  evidenceNumber: z.string().min(1),
+  type: z.string().min(1),
+  description: z.string().min(1),
+  source: z.string().min(1),
+  dateReceived: z.string().datetime().optional(),
+  collectedBy: z.string().optional(),
+  storageLocation: z.string().optional(),
+  hashValue: z.string().optional(),
+  chainOfCustody: z.any().optional(),
+  metadata: z.any().optional()
+});
+
+const custodyUpdateSchema = z.object({
+  transferredTo: z.string().min(1),
+  transferredBy: z.string().min(1),
+  location: z.string().min(1),
+  purpose: z.string().min(1)
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Create API router
@@ -1230,9 +1271,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
-      const investigation = await getInvestigation(investigationId);
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
       if (!investigation) {
-        return res.status(404).json({ message: "Investigation not found" });
+        return res.status(404).json({ message: "Investigation not found or access denied" });
       }
 
       res.json(investigation);
@@ -1250,8 +1297,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
+      // Validate request body
+      const validation = createInvestigationSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid investigation data",
+          errors: validation.error.errors
+        });
+      }
+
       const investigation = await createInvestigation({
-        ...req.body,
+        ...validation.data,
         userId: user.id
       });
 
@@ -1270,12 +1326,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
-      const { status } = req.body;
-      if (!status) {
-        return res.status(400).json({ message: "Status is required" });
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
       }
 
-      const investigation = await updateInvestigationStatus(investigationId, status);
+      // Authorization check: verify ownership
+      const existing = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      // Validate status value
+      const validation = updateStatusSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid status value",
+          errors: validation.error.errors
+        });
+      }
+
+      const investigation = await updateInvestigationStatus(investigationId, validation.data.status);
       res.json(investigation);
     } catch (error) {
       console.error("Error updating investigation status:", error);
@@ -1291,8 +1362,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      // Validate evidence data
+      const validation = addEvidenceSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid evidence data",
+          errors: validation.error.errors
+        });
+      }
+
       const evidence = await addEvidence({
-        ...req.body,
+        ...validation.data,
         investigationId
       });
 
@@ -1311,6 +1402,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
       const evidence = await getEvidence(investigationId);
       res.json(evidence);
     } catch (error) {
@@ -1327,10 +1429,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid evidence ID" });
       }
 
+      // Validate custody update data
+      const validation = custodyUpdateSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid custody update data",
+          errors: validation.error.errors
+        });
+      }
+
+      // Evidence existence check is performed in updateChainOfCustody function
       const evidence = await updateChainOfCustody(evidenceId, {
-        ...req.body,
+        ...validation.data,
         timestamp: new Date()
       });
+
+      if (!evidence) {
+        return res.status(404).json({ message: "Evidence not found" });
+      }
 
       res.json(evidence);
     } catch (error) {
@@ -1350,6 +1466,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUserByUsername("demo");
       if (!user) {
         return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
       }
 
       const results = await runComprehensiveAnalysis(investigationId, user.id);
@@ -1582,6 +1704,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const investigationId = parseInt(req.params.id);
       if (isNaN(investigationId)) {
         return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
       }
 
       const summary = await generateExecutiveSummary(investigationId);
