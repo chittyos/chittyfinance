@@ -22,12 +22,78 @@ import {
   fetchRepositoryPullRequests,
   fetchRepositoryIssues
 } from "./lib/github";
+import {
+  createInvestigation,
+  getInvestigation,
+  listInvestigations,
+  updateInvestigationStatus,
+  addEvidence,
+  getEvidence,
+  updateChainOfCustody,
+  analyzeAllTransactions,
+  detectDuplicatePayments,
+  detectUnusualTiming,
+  detectRoundDollarAnomalies,
+  runBenfordsLawAnalysis,
+  traceFlowOfFunds,
+  createFlowOfFundsRecord,
+  getFlowOfFunds,
+  calculateDirectLoss,
+  calculateNetWorthMethod,
+  calculatePreJudgmentInterest,
+  generateExecutiveSummary,
+  createForensicReport,
+  getForensicReports,
+  runComprehensiveAnalysis,
+  verifyInvestigationOwnership
+} from "./lib/forensicService";
 import { generateOAuthState, validateOAuthState } from "./lib/oauth-state";
 import { requireIntegration } from "./lib/integration-validation";
 import * as storageHelpers from "./lib/storage-helpers";
 import { toStringId } from "./lib/id-compat";
+import { transformToUniversalFormat } from "./lib/universal";
+import { isAuthenticated } from "./middleware/auth";
 
 const MODE = process.env.MODE || 'standalone';
+
+// Forensic investigation validation schemas and constants
+const ALLOWED_INVESTIGATION_STATUSES = ['open', 'in_progress', 'completed', 'closed'] as const;
+
+const createInvestigationSchema = z.object({
+  caseNumber: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  allegations: z.string().optional(),
+  investigationPeriodStart: z.string().datetime().optional(),
+  investigationPeriodEnd: z.string().datetime().optional(),
+  status: z.enum(ALLOWED_INVESTIGATION_STATUSES).optional(),
+  leadInvestigator: z.string().optional(),
+  metadata: z.any().optional()
+});
+
+const updateStatusSchema = z.object({
+  status: z.enum(ALLOWED_INVESTIGATION_STATUSES)
+});
+
+const addEvidenceSchema = z.object({
+  evidenceNumber: z.string().min(1),
+  type: z.string().min(1),
+  description: z.string().min(1),
+  source: z.string().min(1),
+  dateReceived: z.string().datetime().optional(),
+  collectedBy: z.string().optional(),
+  storageLocation: z.string().optional(),
+  hashValue: z.string().optional(),
+  chainOfCustody: z.any().optional(),
+  metadata: z.any().optional()
+});
+
+const custodyUpdateSchema = z.object({
+  transferredTo: z.string().min(1),
+  transferredBy: z.string().min(1),
+  location: z.string().min(1),
+  purpose: z.string().min(1)
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Create API router
@@ -1176,6 +1242,522 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error(`Error fetching issues for ${req.params.repoFullName}:`, error);
       res.status(500).json({ message: "Failed to fetch repository issues" });
+    }
+  });
+
+  // Forensic Investigation Routes
+
+  // Get all investigations for user
+  api.get("/forensics/investigations", async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const investigations = await listInvestigations(user.id);
+      res.json(investigations);
+    } catch (error) {
+      console.error("Error fetching investigations:", error);
+      res.status(500).json({ message: "Failed to fetch investigations" });
+    }
+  });
+
+  // Get specific investigation
+  api.get("/forensics/investigations/:id", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      res.json(investigation);
+    } catch (error) {
+      console.error("Error fetching investigation:", error);
+      res.status(500).json({ message: "Failed to fetch investigation" });
+    }
+  });
+
+  // Create new investigation
+  api.post("/forensics/investigations", async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Validate request body
+      const validation = createInvestigationSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid investigation data",
+          errors: validation.error.errors
+        });
+      }
+
+      const investigation = await createInvestigation({
+        ...validation.data,
+        userId: user.id
+      });
+
+      res.status(201).json(investigation);
+    } catch (error) {
+      console.error("Error creating investigation:", error);
+      res.status(500).json({ message: "Failed to create investigation" });
+    }
+  });
+
+  // Update investigation status
+  api.patch("/forensics/investigations/:id/status", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify ownership
+      const existing = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      // Validate status value
+      const validation = updateStatusSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid status value",
+          errors: validation.error.errors
+        });
+      }
+
+      const investigation = await updateInvestigationStatus(investigationId, validation.data.status);
+      res.json(investigation);
+    } catch (error) {
+      console.error("Error updating investigation status:", error);
+      res.status(500).json({ message: "Failed to update investigation status" });
+    }
+  });
+
+  // Add evidence to investigation
+  api.post("/forensics/investigations/:id/evidence", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      // Validate evidence data
+      const validation = addEvidenceSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid evidence data",
+          errors: validation.error.errors
+        });
+      }
+
+      const evidence = await addEvidence({
+        ...validation.data,
+        investigationId
+      });
+
+      res.status(201).json(evidence);
+    } catch (error) {
+      console.error("Error adding evidence:", error);
+      res.status(500).json({ message: "Failed to add evidence" });
+    }
+  });
+
+  // Get evidence for investigation
+  api.get("/forensics/investigations/:id/evidence", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      const evidence = await getEvidence(investigationId);
+      res.json(evidence);
+    } catch (error) {
+      console.error("Error fetching evidence:", error);
+      res.status(500).json({ message: "Failed to fetch evidence" });
+    }
+  });
+
+  // Update chain of custody for evidence
+  api.post("/forensics/evidence/:id/custody", async (req: Request, res: Response) => {
+    try {
+      const evidenceId = parseInt(req.params.id);
+      if (isNaN(evidenceId)) {
+        return res.status(400).json({ message: "Invalid evidence ID" });
+      }
+
+      // Validate custody update data
+      const validation = custodyUpdateSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid custody update data",
+          errors: validation.error.errors
+        });
+      }
+
+      // Evidence existence check is performed in updateChainOfCustody function
+      const evidence = await updateChainOfCustody(evidenceId, {
+        ...validation.data,
+        timestamp: new Date()
+      });
+
+      if (!evidence) {
+        return res.status(404).json({ message: "Evidence not found" });
+      }
+
+      res.json(evidence);
+    } catch (error) {
+      console.error("Error updating chain of custody:", error);
+      res.status(500).json({ message: "Failed to update chain of custody" });
+    }
+  });
+
+  // Run comprehensive analysis
+  api.post("/forensics/investigations/:id/analyze", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      const results = await runComprehensiveAnalysis(investigationId, user.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error running comprehensive analysis:", error);
+      res.status(500).json({ message: "Failed to run comprehensive analysis" });
+    }
+  });
+
+  // Run specific analysis: Duplicate Payments
+  api.post("/forensics/investigations/:id/analyze/duplicates", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const results = await detectDuplicatePayments(investigationId, user.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error detecting duplicate payments:", error);
+      res.status(500).json({ message: "Failed to detect duplicate payments" });
+    }
+  });
+
+  // Run specific analysis: Unusual Timing
+  api.post("/forensics/investigations/:id/analyze/timing", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const results = await detectUnusualTiming(investigationId, user.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error detecting unusual timing:", error);
+      res.status(500).json({ message: "Failed to detect unusual timing" });
+    }
+  });
+
+  // Run specific analysis: Round Dollar Amounts
+  api.post("/forensics/investigations/:id/analyze/round-dollars", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const results = await detectRoundDollarAnomalies(investigationId, user.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error detecting round dollar anomalies:", error);
+      res.status(500).json({ message: "Failed to detect round dollar anomalies" });
+    }
+  });
+
+  // Run specific analysis: Benford's Law
+  api.post("/forensics/investigations/:id/analyze/benfords-law", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const results = await runBenfordsLawAnalysis(investigationId, user.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error running Benford's Law analysis:", error);
+      res.status(500).json({ message: "Failed to run Benford's Law analysis" });
+    }
+  });
+
+  // Trace flow of funds
+  api.post("/forensics/investigations/:id/trace-funds", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const { transactionId } = req.body;
+      if (!transactionId) {
+        return res.status(400).json({ message: "Transaction ID is required" });
+      }
+
+      const trace = await traceFlowOfFunds(investigationId, transactionId);
+      res.json(trace);
+    } catch (error) {
+      console.error("Error tracing flow of funds:", error);
+      res.status(500).json({ message: "Failed to trace flow of funds" });
+    }
+  });
+
+  // Create flow of funds record
+  api.post("/forensics/investigations/:id/flow-of-funds", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const flow = await createFlowOfFundsRecord({
+        ...req.body,
+        investigationId
+      });
+
+      res.status(201).json(flow);
+    } catch (error) {
+      console.error("Error creating flow of funds record:", error);
+      res.status(500).json({ message: "Failed to create flow of funds record" });
+    }
+  });
+
+  // Get flow of funds records
+  api.get("/forensics/investigations/:id/flow-of-funds", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const flows = await getFlowOfFunds(investigationId);
+      res.json(flows);
+    } catch (error) {
+      console.error("Error fetching flow of funds:", error);
+      res.status(500).json({ message: "Failed to fetch flow of funds" });
+    }
+  });
+
+  // Calculate damages: Direct Loss
+  api.post("/forensics/investigations/:id/calculate-damages/direct-loss", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const { improperTransactionIds } = req.body;
+      if (!Array.isArray(improperTransactionIds)) {
+        return res.status(400).json({ message: "improperTransactionIds array is required" });
+      }
+
+      const damages = await calculateDirectLoss(investigationId, improperTransactionIds);
+      res.json(damages);
+    } catch (error) {
+      console.error("Error calculating direct loss:", error);
+      res.status(500).json({ message: "Failed to calculate direct loss" });
+    }
+  });
+
+  // Calculate damages: Net Worth Method
+  api.post("/forensics/investigations/:id/calculate-damages/net-worth", async (req: Request, res: Response) => {
+    try {
+      const { beginningNetWorth, endingNetWorth, personalExpenditures, legitimateIncome } = req.body;
+
+      if (
+        typeof beginningNetWorth !== 'number' ||
+        typeof endingNetWorth !== 'number' ||
+        typeof personalExpenditures !== 'number' ||
+        typeof legitimateIncome !== 'number'
+      ) {
+        return res.status(400).json({ message: "All net worth parameters are required" });
+      }
+
+      const damages = await calculateNetWorthMethod(
+        beginningNetWorth,
+        endingNetWorth,
+        personalExpenditures,
+        legitimateIncome
+      );
+
+      res.json(damages);
+    } catch (error) {
+      console.error("Error calculating net worth damages:", error);
+      res.status(500).json({ message: "Failed to calculate net worth damages" });
+    }
+  });
+
+  // Calculate pre-judgment interest
+  api.post("/forensics/calculate-interest", async (req: Request, res: Response) => {
+    try {
+      const { lossAmount, lossDate, interestRate } = req.body;
+
+      if (
+        typeof lossAmount !== 'number' ||
+        !lossDate ||
+        typeof interestRate !== 'number'
+      ) {
+        return res.status(400).json({ message: "lossAmount, lossDate, and interestRate are required" });
+      }
+
+      const interest = calculatePreJudgmentInterest(
+        lossAmount,
+        new Date(lossDate),
+        interestRate
+      );
+
+      res.json({ interest, totalWithInterest: lossAmount + interest });
+    } catch (error) {
+      console.error("Error calculating interest:", error);
+      res.status(500).json({ message: "Failed to calculate interest" });
+    }
+  });
+
+  // Generate executive summary
+  api.post("/forensics/investigations/:id/generate-summary", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Authorization check: verify investigation ownership
+      const investigation = await verifyInvestigationOwnership(investigationId, user.id);
+      if (!investigation) {
+        return res.status(404).json({ message: "Investigation not found or access denied" });
+      }
+
+      const summary = await generateExecutiveSummary(investigationId);
+      res.json({ summary });
+    } catch (error) {
+      console.error("Error generating executive summary:", error);
+      res.status(500).json({ message: "Failed to generate executive summary" });
+    }
+  });
+
+  // Create forensic report
+  api.post("/forensics/investigations/:id/reports", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const report = await createForensicReport({
+        ...req.body,
+        investigationId
+      });
+
+      res.status(201).json(report);
+    } catch (error) {
+      console.error("Error creating forensic report:", error);
+      res.status(500).json({ message: "Failed to create forensic report" });
+    }
+  });
+
+  // Get forensic reports
+  api.get("/forensics/investigations/:id/reports", async (req: Request, res: Response) => {
+    try {
+      const investigationId = parseInt(req.params.id);
+      if (isNaN(investigationId)) {
+        return res.status(400).json({ message: "Invalid investigation ID" });
+      }
+
+      const reports = await getForensicReports(investigationId);
+      res.json(reports);
+    } catch (error) {
+      console.error("Error fetching forensic reports:", error);
+      res.status(500).json({ message: "Failed to fetch forensic reports" });
     }
   });
 

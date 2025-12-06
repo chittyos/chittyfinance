@@ -2,7 +2,7 @@ import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
-import { useEffect, useState } from "react";
+import { useEffect, useState, createContext } from "react";
 import Dashboard from "@/pages/Dashboard";
 import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
@@ -16,6 +16,17 @@ import Connections from "@/pages/Connections";
 import { User } from "@shared/schema";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { TenantProvider } from "@/contexts/TenantContext";
+
+// Create AuthContext
+export const AuthContext = createContext<{
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+}>({
+  user: null,
+  isAuthenticated: false,
+  isLoading: true
+});
 
 function Router() {
   const [location] = useLocation();
@@ -86,7 +97,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <TenantProvider>
-          <Router />
+          <AuthContext.Provider value={authContextValue}>
+            <Router />
+          </AuthContext.Provider>
         </TenantProvider>
       </ThemeProvider>
     </QueryClientProvider>
