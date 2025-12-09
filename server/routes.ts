@@ -6,7 +6,7 @@ import { resolveTenant } from "./middleware/tenant";
 import { getServiceBase } from "./lib/registry";
 import { getServiceAuthHeader } from "./lib/chitty-connect";
 import { z } from "zod";
-import { insertAiMessageSchema, insertIntegrationSchema, insertTaskSchema } from "@shared/schema";
+import { insertAiMessageSchema, insertIntegrationSchema, insertTaskSchema, insertForensicFlowOfFundsSchema, insertForensicReportSchema, forensicEvidence } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, inArray } from "drizzle-orm";
 import * as schema from "../database/system.schema";
@@ -1429,6 +1429,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid evidence ID" });
       }
 
+      const user = await storage.getUserByUsername("demo");
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
       // Validate custody update data
       const validation = custodyUpdateSchema.safeParse(req.body);
       if (!validation.success) {
@@ -1438,7 +1443,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Evidence existence check is performed in updateChainOfCustody function
+      // Fetch evidence and verify investigation ownership
+      const [evidenceRecord] = await db
+        .select()
+        .from(forensicEvidence)
+        .where(eq(forensicEvidence.id, evidenceId));
+
+      if (!evidenceRecord) {
+        return res.status(404).json({ message: "Evidence not found" });
+      }
+
+      const investigation = await verifyInvestigationOwnership(
+        evidenceRecord.investigationId,
+        user.id
+      );
+
+      if (!investigation) {
+        return res.status(403).json({ message: "Access denied to this investigation" });
+      }
+
+      // Update chain of custody
       const evidence = await updateChainOfCustody(evidenceId, {
         ...validation.data,
         timestamp: new Date()
@@ -1595,10 +1619,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
-      const flow = await createFlowOfFundsRecord({
+      // Validate input data
+      const validation = insertForensicFlowOfFundsSchema.safeParse({
         ...req.body,
         investigationId
       });
+
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid flow of funds data",
+          errors: validation.error.errors
+        });
+      }
+
+      const flow = await createFlowOfFundsRecord(validation.data);
 
       res.status(201).json(flow);
     } catch (error) {
@@ -1733,10 +1767,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid investigation ID" });
       }
 
-      const report = await createForensicReport({
+      // Validate input data
+      const validation = insertForensicReportSchema.safeParse({
         ...req.body,
         investigationId
       });
+
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid forensic report data",
+          errors: validation.error.errors
+        });
+      }
+
+      const report = await createForensicReport(validation.data);
 
       res.status(201).json(report);
     } catch (error) {

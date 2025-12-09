@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, real, varchar, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, real, varchar, index, uniqueIndex, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -210,7 +210,10 @@ export const forensicTransactionAnalysis = pgTable("forensic_transaction_analysi
   analyzedBy: text("analyzed_by"),
   analyzedAt: timestamp("analyzed_at").defaultNow(),
   evidenceReferences: jsonb("evidence_references"), // Links to related evidence
-});
+}, (table) => ({
+  investigationIdIdx: index("forensic_analysis_investigation_id_idx").on(table.investigationId),
+  riskLevelIdx: index("forensic_analysis_risk_level_idx").on(table.riskLevel),
+}));
 
 export const insertForensicTransactionAnalysisSchema = createInsertSchema(forensicTransactionAnalysis).pick({
   investigationId: true,
@@ -240,7 +243,10 @@ export const forensicAnomalies = pgTable("forensic_anomalies", {
   reviewNotes: text("review_notes"),
   reviewedBy: text("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
-});
+}, (table) => ({
+  investigationIdIdx: index("forensic_anomalies_investigation_id_idx").on(table.investigationId),
+  severityIdx: index("forensic_anomalies_severity_idx").on(table.severity),
+}));
 
 export const insertForensicAnomalySchema = createInsertSchema(forensicAnomalies).pick({
   investigationId: true,
