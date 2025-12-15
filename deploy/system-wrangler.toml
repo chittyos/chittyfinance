@@ -1,38 +1,56 @@
-name = "chittyfinance"
-main = "dist/system/worker.js"
-compatibility_date = "2024-01-01"
-compatibility_flags = ["nodejs_compat"]
+# Cloudflare Workers configuration for ChittyFinance (System Mode)
 
-# Account and workers configuration
-# account_id will be set via wrangler login or environment
+name = "chittyfinance"
+main = "../server/worker.ts"
+compatibility_date = "2024-11-01"
+
+account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"
 workers_dev = false
 
-# Custom domain route
 routes = [
-  { pattern = "finance.chitty.cc/*", custom_domain = true }
+  { pattern = "finance.chitty.cc/*", zone_name = "chitty.cc" }
 ]
 
-# Environment variables (non-sensitive)
 [vars]
-NODE_ENV = "production"
 MODE = "system"
+NODE_ENV = "production"
 
-# Secrets (set via: wrangler secret put <NAME>)
-# - DATABASE_URL
-# - OPENAI_API_KEY
-# - CHITTYCONNECT_API_BASE
-# - CHITTY_AUTH_SERVICE_TOKEN
-
-# Node.js compatibility for Neon DB, Express, etc.
-node_compat = true
-
-# Increase limits for production workload
-[limits]
-cpu_ms = 50000
-
-# Build configuration
 [build]
 command = "npm run build:system"
 
 [build.upload]
 format = "modules"
+
+[assets]
+directory = "../dist/public"
+
+[limits]
+cpu_ms = 50
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id"
+preview_id = "your-preview-kv-namespace-id"
+
+[[r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "chittyfinance-documents"
+preview_bucket_name = "chittyfinance-documents-preview"
+
+[[durable_objects.bindings]]
+name = "CF_AGENT"
+class_name = "ChittyAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChittyAgent"]
+
+[env.staging]
+name = "chittyfinance-staging"
+vars = { MODE = "system", NODE_ENV = "staging" }
+
+[env.production]
+name = "chittyfinance"
+vars = { MODE = "system", NODE_ENV = "production" }
+
+compatibility_flags = ["nodejs_compat"]
