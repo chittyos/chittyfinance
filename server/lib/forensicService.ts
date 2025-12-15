@@ -96,6 +96,58 @@ export interface FlowOfFundsTrace {
 }
 
 // ============================================================================
+// Risk Analysis Constants
+// ============================================================================
+
+/**
+ * Risk scoring thresholds and weights for transaction analysis.
+ * These values are based on forensic accounting best practices.
+ */
+const RISK_THRESHOLDS = {
+  /** Minimum dollar amount to flag round-dollar transactions (e.g., $100.00) */
+  ROUND_DOLLAR_MIN_AMOUNT: 100,
+
+  /** Dollar amount threshold for flagging unusually large transactions */
+  LARGE_AMOUNT_THRESHOLD: 50000,
+
+  /** Minimum description length to avoid vague description flag */
+  MIN_DESCRIPTION_LENGTH: 10,
+};
+
+/**
+ * Risk score weights for different red flag types.
+ * Higher scores indicate more severe risk indicators.
+ */
+const RISK_SCORE_WEIGHTS = {
+  /** Points added for round dollar amounts */
+  ROUND_DOLLAR: 15,
+
+  /** Points added for unusually large transactions */
+  LARGE_AMOUNT: 25,
+
+  /** Points added for weekend/holiday transactions */
+  WEEKEND_TRANSACTION: 20,
+
+  /** Points added for vague or missing descriptions */
+  VAGUE_DESCRIPTION: 10,
+
+  /** Points added for suspicious keywords in descriptions */
+  SUSPICIOUS_KEYWORDS: 15,
+};
+
+/**
+ * Total risk score thresholds for categorizing transaction risk levels.
+ */
+const RISK_LEVEL_THRESHOLDS = {
+  /** Minimum score for high risk classification */
+  HIGH_RISK: 50,
+
+  /** Minimum score for medium risk classification */
+  MEDIUM_RISK: 25,
+  // Anything below MEDIUM_RISK is considered low risk
+};
+
+// ============================================================================
 // Authorization Helper
 // ============================================================================
 
@@ -192,6 +244,7 @@ export async function updateChainOfCustody(
     purpose: string;
   }
 ): Promise<ForensicEvidence | undefined> {
+  // Check if evidence exists
   const [evidence] = await db
     .select()
     .from(forensicEvidence)
@@ -199,12 +252,12 @@ export async function updateChainOfCustody(
 
   if (!evidence) return undefined;
 
-  const currentChain = (evidence.chainOfCustody as any[]) || [];
-  const updatedChain = [...currentChain, custodyEntry];
-
+  // Use atomic JSONB append to prevent race conditions
   const [updated] = await db
     .update(forensicEvidence)
-    .set({ chainOfCustody: updatedChain })
+    .set({
+      chainOfCustody: sql`COALESCE(${forensicEvidence.chainOfCustody}, '[]'::jsonb) || ${JSON.stringify([custodyEntry])}::jsonb`
+    })
     .where(eq(forensicEvidence.id, evidenceId))
     .returning();
 
@@ -227,15 +280,15 @@ export async function analyzeTransaction(
   let riskScore = 0;
 
   // Check for round dollar amounts
-  if (Math.abs(transaction.amount) % 1 === 0 && Math.abs(transaction.amount) >= 100) {
+  if (Math.abs(transaction.amount) % 1 === 0 && Math.abs(transaction.amount) >= RISK_THRESHOLDS.ROUND_DOLLAR_MIN_AMOUNT) {
     redFlags.push("Round dollar amount");
-    riskScore += 15;
+    riskScore += RISK_SCORE_WEIGHTS.ROUND_DOLLAR;
   }
 
   // Check for unusual amounts (very large)
-  if (Math.abs(transaction.amount) > 50000) {
+  if (Math.abs(transaction.amount) > RISK_THRESHOLDS.LARGE_AMOUNT_THRESHOLD) {
     redFlags.push("Unusually large amount");
-    riskScore += 25;
+    riskScore += RISK_SCORE_WEIGHTS.LARGE_AMOUNT;
   }
 
   // Check for weekend/holiday transactions (simplified)
@@ -243,14 +296,14 @@ export async function analyzeTransaction(
     const day = new Date(transaction.date).getDay();
     if (day === 0 || day === 6) {
       redFlags.push("Weekend transaction");
-      riskScore += 20;
+      riskScore += RISK_SCORE_WEIGHTS.WEEKEND_TRANSACTION;
     }
   }
 
   // Check for vague descriptions
-  if (!transaction.description || transaction.description.length < 10) {
+  if (!transaction.description || transaction.description.length < RISK_THRESHOLDS.MIN_DESCRIPTION_LENGTH) {
     redFlags.push("Vague or missing description");
-    riskScore += 10;
+    riskScore += RISK_SCORE_WEIGHTS.VAGUE_DESCRIPTION;
   }
 
   // Check for suspicious keywords
@@ -258,13 +311,13 @@ export async function analyzeTransaction(
   const description = (transaction.description || '').toLowerCase();
   if (suspiciousKeywords.some(keyword => description.includes(keyword))) {
     redFlags.push("Suspicious description keywords");
-    riskScore += 15;
+    riskScore += RISK_SCORE_WEIGHTS.SUSPICIOUS_KEYWORDS;
   }
 
   // Determine risk level
   let riskLevel: "high" | "medium" | "low";
-  if (riskScore >= 50) riskLevel = "high";
-  else if (riskScore >= 25) riskLevel = "medium";
+  if (riskScore >= RISK_LEVEL_THRESHOLDS.HIGH_RISK) riskLevel = "high";
+  else if (riskScore >= RISK_LEVEL_THRESHOLDS.MEDIUM_RISK) riskLevel = "medium";
   else riskLevel = "low";
 
   // Determine legitimacy assessment
@@ -294,13 +347,14 @@ export async function analyzeAllTransactions(
     .where(eq(transactions.userId, userId));
 
   const results: TransactionAnalysisResult[] = [];
+  const analysesToInsert = [];
 
   for (const transaction of userTransactions) {
     const analysis = await analyzeTransaction(investigationId, transaction);
     results.push(analysis);
 
-    // Store analysis in database
-    await db.insert(forensicTransactionAnalysis).values({
+    // Collect analysis for batch insert
+    analysesToInsert.push({
       investigationId,
       transactionId: transaction.id,
       transactionDate: transaction.date,
@@ -313,6 +367,11 @@ export async function analyzeAllTransactions(
       analyzedBy: "Automated System",
       evidenceReferences: []
     });
+  }
+
+  // Batch insert all analyses
+  if (analysesToInsert.length > 0) {
+    await db.insert(forensicTransactionAnalysis).values(analysesToInsert);
   }
 
   return results;
@@ -643,6 +702,18 @@ export async function calculateDirectLoss(
   investigationId: number,
   improperTransactionIds: number[]
 ): Promise<DamageCalculation> {
+  // Handle empty array case
+  if (improperTransactionIds.length === 0) {
+    return {
+      method: "direct_loss",
+      totalDamage: 0,
+      breakdown: [],
+      confidenceLevel: "high",
+      assumptions: ["No improper transactions identified"],
+      limitations: ["Does not include consequential damages", "Does not include interest"]
+    };
+  }
+
   const improperTransactions = await db
     .select()
     .from(transactions)
@@ -652,7 +723,7 @@ export async function calculateDirectLoss(
   const breakdown: { category: string; amount: number; description: string }[] = [];
 
   for (const transaction of improperTransactions) {
-    const amount = Math.abs(transaction.amount);
+    const amount = Math.abs(parseFloat(String(transaction.amount)) || 0);
     totalDamage += amount;
 
     breakdown.push({
@@ -753,7 +824,7 @@ export async function generateExecutiveSummary(
 
   const totalImproper = analyses
     .filter(a => a.legitimacyAssessment === "improper")
-    .reduce((sum, a) => sum + Math.abs(a.transactionAmount || 0), 0);
+    .reduce((sum, a) => sum + Math.abs(parseFloat(String(a.transactionAmount)) || 0), 0);
 
   let summary = `# Executive Summary: ${investigation.title}\n\n`;
   summary += `**Case Number:** ${investigation.caseNumber}\n`;
