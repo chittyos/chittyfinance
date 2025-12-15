@@ -35,4 +35,4 @@ cpu_ms = 50000
 command = "npm run build:system"
 
 [build.upload]
-format = "service-worker"
+format = "modules"
